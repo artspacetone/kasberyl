@@ -1,0 +1,6 @@
+{
+  "name": "Warga Beryl & Majelis Al Barokah",
+  "description": "Sistem Informasi Keuangan Kas Iuran Warga Rp 10.000, Infaq Majelis Al Barokah, dan Pinjaman Warga Qardhul Hasan",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
