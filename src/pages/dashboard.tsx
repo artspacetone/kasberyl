@@ -7,8 +7,8 @@ import {
   Scale, HandCoins, Sparkles, TrendingUp, Calendar, 
   FileSpreadsheet, Users, BarChart3, AlertTriangle, 
   CheckCircle2, Home, UserCheck, Clock,
-  Coins, Building2, Wallet, ArrowRight, Minus, Plus, Equal,
-  ShieldAlert, UserX
+  Coins, Building2, Wallet, Minus, Equal,
+  UserX
 } from 'lucide-react';
 import { exportMasterBackupExcel } from '../utils/exportManager';
 
@@ -33,10 +33,20 @@ export const Dashboard: React.FC = () => {
 
     if (isSupabaseConfigured) {
       try {
-        const [resWarga, resKas, resMajelis, resAcara, resPengeluaran, resPinjaman] = await Promise.all([
+        // Query kas_warga dengan fallback ke kas_warga_beryl
+        let resKas = await supabase.from('kas_warga').select('*');
+        if (resKas.error || !resKas.data) {
+          resKas = await supabase.from('kas_warga_beryl').select('*');
+        }
+
+        // Query infaq_majelis dengan fallback ke infaq_majelis_albarokah
+        let resMajelis = await supabase.from('infaq_majelis').select('*');
+        if (resMajelis.error || !resMajelis.data) {
+          resMajelis = await supabase.from('infaq_majelis_albarokah').select('*');
+        }
+
+        const [resWarga, resAcara, resPengeluaran, resPinjaman] = await Promise.all([
           supabase.from('warga').select('*'),
-          supabase.from('kas_warga_beryl').select('*'),
-          supabase.from('infaq_majelis_albarokah').select('*'),
           supabase.from('dana_acara').select('*'),
           supabase.from('pengeluaran').select('*'),
           supabase.from('pinjaman_warga').select('*'),
@@ -76,61 +86,47 @@ export const Dashboard: React.FC = () => {
     return () => window.removeEventListener('app_data_updated', handleUpdate);
   }, []);
 
-  // KALKULASI DEMOGRAFI & REKONSILIASI KAS REAL-TIME
   const stats = useMemo(() => {
     const totalWarga = wargaList.length || 0;
 
-    // 1. Demografi Status Warga
     const countMenetap = wargaList.filter(w => (w.status_warga || '').toLowerCase().includes('menetap')).length;
     const countKunjungan = wargaList.filter(w => (w.status_warga || '').toLowerCase().includes('kunjung')).length;
     const countSewa = wargaList.filter(w => (w.status_warga || '').toLowerCase().includes('sewa') || (w.status_warga || '').toLowerCase().includes('kontrak')).length;
     const countKosong = wargaList.filter(w => (w.status_warga || '').toLowerCase().includes('kosong')).length;
-    const countLainnya = Math.max(0, totalWarga - (countMenetap + countKunjungan + countSewa + countKosong));
 
     const pctMenetap = totalWarga > 0 ? Math.round((countMenetap / totalWarga) * 100) : 0;
     const pctKunjungan = totalWarga > 0 ? Math.round((countKunjungan / totalWarga) * 100) : 0;
     const pctSewa = totalWarga > 0 ? Math.round((countSewa / totalWarga) * 100) : 0;
     const pctKosong = totalWarga > 0 ? Math.round((countKosong / totalWarga) * 100) : 0;
 
-    // Warga aktif wajib iuran (unit berpenghuni)
     const wargaWajibKas = wargaList.filter(w => !(w.status_warga || '').toLowerCase().includes('kosong')).length || 1;
 
-    // 2. Realisasi Kas Terkumpul Aktual
     const totalInfaqWargaAktual = kasList.reduce((acc, k) => acc + Number(k.nominal || 0), 0);
     const totalInfaqMajelisAktual = majelisList.filter(m => m.jenis_dana === 'Pemasukan').reduce((acc, m) => acc + Number(m.nominal || 0), 0);
     const totalDanaAcaraMasukAktual = danaAcaraList.filter(a => a.kategori === 'Pemasukan').reduce((acc, a) => acc + Number(a.nominal || 0), 0);
 
     const totalPemasukanSemuaAktual = totalInfaqWargaAktual + totalInfaqMajelisAktual + totalDanaAcaraMasukAktual;
 
-    // 3. Seluruh Beban Pengeluaran & Piutang Pinjaman
     const totalPengeluaranUmum = pengeluaranList.reduce((acc, p) => acc + Number(p.nominal || 0), 0);
     const totalPengeluaranAcara = danaAcaraList.filter(a => a.kategori === 'Pengeluaran').reduce((acc, a) => acc + Number(a.nominal || 0), 0);
     const totalPengeluaranSemua = totalPengeluaranUmum + totalPengeluaranAcara;
 
     const totalPinjamanAktif = pinjamanList.filter(p => p.status_pinjaman === 'Berjalan').reduce((acc, p) => acc + Number(p.sisa_pinjaman || 0), 0);
 
-    // 4. Potensi Kas Warga 1 Tahun (Jika 100% Lancar)
-    // Target Kas = Total KK Wajib x 12 Bulan x Rp 10.000
     const targetKasWargaSetahunLancar = wargaWajibKas * 12 * 10000;
     
-    // Kas Warga aktual pada tahun buku yang dipilih
     const kasTahunIniAktual = kasList
       .filter(k => k.periode_bulan?.startsWith(String(selectedYear)) && k.status_bayar === 'Lunas')
       .reduce((sum, k) => sum + Number(k.nominal || 0), 0);
 
-    // Total Dana Tertunggak
     const totalDanaTertunggak = Math.max(0, targetKasWargaSetahunLancar - kasTahunIniAktual);
     const persentaseTunggakan = targetKasWargaSetahunLancar > 0 ? Math.round((totalDanaTertunggak / targetKasWargaSetahunLancar) * 100) : 0;
     const persentaseTerkumpul = 100 - persentaseTunggakan;
 
-    // Sisa Kas yang SEHARUSNYA Ada (Teoretis Jika Kas 100% Lancar)
     const totalPemasukanSeharusnya = targetKasWargaSetahunLancar + totalInfaqMajelisAktual + totalDanaAcaraMasukAktual;
     const sisaKasSeharusnya = totalPemasukanSeharusnya - totalPengeluaranSemua - totalPinjamanAktif;
-
-    // Sisa Kas RIIL Aktual di Dompet / Bank Saat Ini
     const saldoKasRiilAktual = totalPemasukanSemuaAktual - totalPengeluaranSemua - totalPinjamanAktif;
 
-    // 5. Rata-Rata Kepatuhan Warga Membayar Kas (Tahun Berjalan)
     const monthlyBreakdown = NAMA_BULAN.map((bulanName, idx) => {
       const monthCode = String(idx + 1).padStart(2, '0');
       const prefix = `${selectedYear}-${monthCode}`;
@@ -154,13 +150,11 @@ export const Dashboard: React.FC = () => {
       };
     });
 
-    // Rata-rata KK yang membayar per bulan
     const totalWargaBayarSemuaBulan = monthlyBreakdown.reduce((sum, m) => sum + m.wargaBayarCount, 0);
     const rataRataWargaBayarPerBulan = Math.round(totalWargaBayarSemuaBulan / 12);
     const rataRataPersentaseKepatuhan = wargaWajibKas > 0 ? Math.round((rataRataWargaBayarPerBulan / wargaWajibKas) * 100) : 0;
     const rataRataWargaMenunggakPerBulan = Math.max(0, wargaWajibKas - rataRataWargaBayarPerBulan);
 
-    // Monitoring Bulan Berjalan
     const currentMonthIndex = new Date().getMonth();
     const currentMonthPrefix = `${selectedYear}-${String(currentMonthIndex + 1).padStart(2, '0')}`;
     const bayarBulanIni = new Set(kasList.filter(k => k.periode_bulan?.startsWith(currentMonthPrefix) && k.status_bayar === 'Lunas').map(k => k.id_warga)).size;
@@ -173,7 +167,6 @@ export const Dashboard: React.FC = () => {
       countKunjungan,
       countSewa,
       countKosong,
-      countLainnya,
       pctMenetap,
       pctKunjungan,
       pctSewa,
@@ -224,9 +217,7 @@ export const Dashboard: React.FC = () => {
         </button>
       </div>
 
-      {/* =========================================================================
-          BAGIAN 1: INFOGRAFIS STATUS DATA WARGA (MENETAP VS KUNJUNGAN VS SEWA)
-          ========================================================================= */}
+      {/* Bagian 1: Status Data Warga */}
       <div className="bg-white rounded-3xl border border-slate-200 p-5 md:p-6 shadow-xs space-y-4">
         <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-2 border-b border-slate-100 pb-3">
           <div className="flex items-center space-x-2.5">
@@ -243,10 +234,8 @@ export const Dashboard: React.FC = () => {
           </span>
         </div>
 
-        {/* 4 Kartu Status Hunian */}
         <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
-          {/* Menetap */}
-          <div className="bg-emerald-50/70 border border-emerald-200 rounded-2xl p-4 space-y-1.5 hover:shadow-xs transition-all">
+          <div className="bg-emerald-50/70 border border-emerald-200 rounded-2xl p-4 space-y-1.5">
             <div className="flex items-center justify-between">
               <span className="text-[11px] font-bold text-emerald-800 uppercase tracking-wider">Warga Menetap</span>
               <Home className="w-4 h-4 text-emerald-600" />
@@ -258,8 +247,7 @@ export const Dashboard: React.FC = () => {
             <p className="text-[10px] text-emerald-700 font-medium">Pemilik unit berdomisili tetap</p>
           </div>
 
-          {/* Kunjungan */}
-          <div className="bg-purple-50/70 border border-purple-200 rounded-2xl p-4 space-y-1.5 hover:shadow-xs transition-all">
+          <div className="bg-purple-50/70 border border-purple-200 rounded-2xl p-4 space-y-1.5">
             <div className="flex items-center justify-between">
               <span className="text-[11px] font-bold text-purple-800 uppercase tracking-wider">Warga Kunjungan</span>
               <Clock className="w-4 h-4 text-purple-600" />
@@ -271,8 +259,7 @@ export const Dashboard: React.FC = () => {
             <p className="text-[10px] text-purple-700 font-medium">Hunian berkala / musiman</p>
           </div>
 
-          {/* Penyewa */}
-          <div className="bg-blue-50/70 border border-blue-200 rounded-2xl p-4 space-y-1.5 hover:shadow-xs transition-all">
+          <div className="bg-blue-50/70 border border-blue-200 rounded-2xl p-4 space-y-1.5">
             <div className="flex items-center justify-between">
               <span className="text-[11px] font-bold text-blue-800 uppercase tracking-wider">Warga Penyewa</span>
               <UserCheck className="w-4 h-4 text-blue-600" />
@@ -284,8 +271,7 @@ export const Dashboard: React.FC = () => {
             <p className="text-[10px] text-blue-700 font-medium">Warga sewa / kontrak unit</p>
           </div>
 
-          {/* Kosong */}
-          <div className="bg-slate-50 border border-slate-200 rounded-2xl p-4 space-y-1.5 hover:shadow-xs transition-all">
+          <div className="bg-slate-50 border border-slate-200 rounded-2xl p-4 space-y-1.5">
             <div className="flex items-center justify-between">
               <span className="text-[11px] font-bold text-slate-600 uppercase tracking-wider">Unit Kosong</span>
               <Building2 className="w-4 h-4 text-slate-400" />
@@ -298,26 +284,22 @@ export const Dashboard: React.FC = () => {
           </div>
         </div>
 
-        {/* Multi-Segment Ratio Bar */}
         <div className="space-y-1.5 pt-1">
           <div className="flex justify-between text-[11px] font-bold text-slate-600">
             <span>Rasio Distribusi Hunian Warga</span>
             <span>{stats.wargaWajibKas} KK Wajib Iuran Lingkungan</span>
           </div>
           <div className="w-full h-3 bg-slate-100 rounded-full overflow-hidden flex shadow-inner">
-            <div style={{ width: `${stats.pctMenetap}%` }} className="bg-emerald-500 h-full transition-all duration-500" title={`Menetap: ${stats.countMenetap} KK`} />
-            <div style={{ width: `${stats.pctKunjungan}%` }} className="bg-purple-500 h-full transition-all duration-500" title={`Kunjungan: ${stats.countKunjungan} KK`} />
-            <div style={{ width: `${stats.pctSewa}%` }} className="bg-blue-500 h-full transition-all duration-500" title={`Penyewa: ${stats.countSewa} KK`} />
-            <div style={{ width: `${stats.pctKosong}%` }} className="bg-slate-300 h-full transition-all duration-500" title={`Kosong: ${stats.countKosong} Unit`} />
+            <div style={{ width: `${stats.pctMenetap}%` }} className="bg-emerald-500 h-full transition-all duration-500" />
+            <div style={{ width: `${stats.pctKunjungan}%` }} className="bg-purple-500 h-full transition-all duration-500" />
+            <div style={{ width: `${stats.pctSewa}%` }} className="bg-blue-500 h-full transition-all duration-500" />
+            <div style={{ width: `${stats.pctKosong}%` }} className="bg-slate-300 h-full transition-all duration-500" />
           </div>
         </div>
       </div>
 
-      {/* =========================================================================
-          BAGIAN 2: INFOGRAFIS REKONSILIASI KAS & RATA-RATA KEPATUHAN WARGA
-          ========================================================================= */}
+      {/* Bagian 2: Rekonsiliasi Kas */}
       <div className="bg-white rounded-3xl border-2 border-emerald-500/30 p-6 shadow-sm space-y-6">
-        {/* Header Rekonsiliasi & Tahun Buku */}
         <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-3 border-b pb-4">
           <div>
             <div className="flex items-center space-x-2">
@@ -327,7 +309,7 @@ export const Dashboard: React.FC = () => {
               </h3>
             </div>
             <p className="text-xs text-slate-500 mt-0.5">
-              Perbandingan transparansi antara uang yang <em>seharusnya terkumpul jika lancar 100%</em> dengan <em>sisa kas riil aktual di kas/bank</em>.
+              Perbandingan transparansi antara uang yang <em>seharusnya terkumpul jika lancar 100%</em> dengan <em>sisa kas riil aktual</em>.
             </p>
           </div>
           <div className="flex items-center space-x-2">
@@ -343,9 +325,7 @@ export const Dashboard: React.FC = () => {
           </div>
         </div>
 
-        {/* 4 Pilar Utama Analisis Komparasi Keuangan */}
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-          {/* 1. Kas Iuran Seharusnya */}
           <div className="bg-slate-50 border border-slate-200 rounded-2xl p-4 space-y-1.5">
             <div className="flex items-center justify-between">
               <span className="text-[10px] font-black text-slate-500 uppercase tracking-wider">1. Kas Iuran Seharusnya</span>
@@ -357,7 +337,6 @@ export const Dashboard: React.FC = () => {
             </p>
           </div>
 
-          {/* 2. Dana Tertunggak */}
           <div className="bg-rose-50 border border-rose-200 rounded-2xl p-4 space-y-1.5">
             <div className="flex items-center justify-between">
               <span className="text-[10px] font-black text-rose-700 uppercase tracking-wider">2. Dana Tertunggak</span>
@@ -369,7 +348,6 @@ export const Dashboard: React.FC = () => {
             </p>
           </div>
 
-          {/* 3. Sisa Kas Seharusnya */}
           <div className="bg-indigo-50/70 border border-indigo-200 rounded-2xl p-4 space-y-1.5">
             <div className="flex items-center justify-between">
               <span className="text-[10px] font-black text-indigo-700 uppercase tracking-wider">3. Sisa Kas Seharusnya</span>
@@ -381,7 +359,6 @@ export const Dashboard: React.FC = () => {
             </p>
           </div>
 
-          {/* 4. Sisa Kas RIIL Aktual */}
           <div className="bg-gradient-to-br from-emerald-600 to-teal-700 text-white rounded-2xl p-4 space-y-1.5 shadow-md">
             <div className="flex items-center justify-between">
               <span className="text-[10px] font-black text-emerald-100 uppercase tracking-wider">4. Sisa Kas RIIL Aktual</span>
@@ -394,39 +371,34 @@ export const Dashboard: React.FC = () => {
           </div>
         </div>
 
-        {/* PETA ALUR VISUAL KAS (Sangat Mudah Dipahami Orang Awam) */}
+        {/* Visual Flow */}
         <div className="bg-slate-50/80 border border-slate-200 rounded-2xl p-4 md:p-5 space-y-3">
           <div className="flex items-center space-x-2 font-bold text-xs text-slate-800">
             <Wallet className="w-4 h-4 text-emerald-600" />
-            <span>Bagan Alur Perjalanan Uang Kas (Logika Sederhana untuk Warga):</span>
+            <span>Bagan Alur Perjalanan Uang Kas:</span>
           </div>
 
           <div className="grid grid-cols-1 sm:grid-cols-5 gap-2.5 items-center text-center text-xs">
-            {/* Step 1: Target */}
             <div className="bg-white p-3 rounded-xl border border-slate-200 space-y-1">
               <span className="text-[10px] font-bold text-slate-400 uppercase">Target Masuk</span>
               <p className="font-black text-slate-800">{formatRupiah(stats.targetKasWargaSetahunLancar)}</p>
               <span className="text-[9px] text-slate-500">100% Iuran Wajib</span>
             </div>
 
-            {/* Minus Sign */}
             <div className="hidden sm:flex justify-center text-rose-500 font-black">
               <Minus className="w-5 h-5" />
             </div>
 
-            {/* Step 2: Tunggakan */}
             <div className="bg-rose-50 p-3 rounded-xl border border-rose-200 space-y-1">
               <span className="text-[10px] font-bold text-rose-600 uppercase">Tunggakan</span>
               <p className="font-black text-rose-600">-{formatRupiah(stats.totalDanaTertunggak)}</p>
               <span className="text-[9px] text-rose-500">Belum Disetor</span>
             </div>
 
-            {/* Minus/Plus Sign */}
             <div className="hidden sm:flex justify-center text-slate-400 font-black">
               <Minus className="w-5 h-5" />
             </div>
 
-            {/* Step 3: Pengeluaran & Pinjaman */}
             <div className="bg-slate-100 p-3 rounded-xl border border-slate-300 space-y-1">
               <span className="text-[10px] font-bold text-slate-600 uppercase">Pengeluaran & Pinjaman</span>
               <p className="font-black text-slate-700">-{formatRupiah(stats.totalPengeluaranSemua + stats.totalPinjamanAktif)}</p>
@@ -434,7 +406,6 @@ export const Dashboard: React.FC = () => {
             </div>
           </div>
 
-          {/* Result Banner */}
           <div className="bg-emerald-600 text-white p-3.5 rounded-xl flex flex-col sm:flex-row justify-between items-center gap-2">
             <div className="flex items-center space-x-2">
               <Equal className="w-5 h-5 text-emerald-200 hidden sm:inline" />
@@ -444,7 +415,7 @@ export const Dashboard: React.FC = () => {
           </div>
         </div>
 
-        {/* KARTU RATA-RATA KEPATUHAN WARGA */}
+        {/* Statistik Kepatuhan */}
         <div className="bg-gradient-to-r from-teal-50 via-emerald-50 to-indigo-50 border border-emerald-200 rounded-2xl p-4 md:p-5 space-y-3">
           <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-2">
             <div className="flex items-center space-x-2">
@@ -493,38 +464,9 @@ export const Dashboard: React.FC = () => {
             </div>
           </div>
         </div>
-
-        {/* Narrative Callout Box: Penjelasan Transparan bagi Warga */}
-        <div className="bg-amber-50 border border-amber-200 rounded-2xl p-4 text-xs text-amber-900 space-y-2">
-          <div className="flex items-center space-x-2 font-bold text-amber-950">
-            <AlertTriangle className="w-4 h-4 text-amber-600 shrink-0" />
-            <span>Kesimpulan Transparansi Akuntansi bagi Warga:</span>
-          </div>
-          <p className="leading-relaxed">
-            Total seluruh target penerimaan iuran kas warga untuk tahun buku {selectedYear} adalah sebesar{' '}
-            <strong className="font-bold">{formatRupiah(stats.targetKasWargaSetahunLancar)}</strong>. Setelah dikurangi total seluruh beban pengeluaran operasional & sosial (
-            <span className="font-semibold text-rose-700">-{formatRupiah(stats.totalPengeluaranSemua)}</span>) dan pinjaman bergulir beredar (
-            <span className="font-semibold text-amber-800">-{formatRupiah(stats.totalPinjamanAktif)}</span>), maka{' '}
-            <strong className="text-indigo-900 underline font-bold">
-              Sisa Kas yang Seharusnya Ada adalah {formatRupiah(stats.sisaKasSeharusnya)}
-            </strong>
-            .
-          </p>
-          <p className="leading-relaxed pt-1 border-t border-amber-200/60">
-            Namun, karena sampai saat ini masih terdapat{' '}
-            <strong className="text-rose-700 font-bold">Dana Tertunggak sebesar {formatRupiah(stats.totalDanaTertunggak)}</strong> (dengan rata-rata partisipasi warga bayar adalah{' '}
-            <strong className="text-slate-900">{stats.rataRataWargaBayarPerBulan} dari {stats.wargaWajibKas} KK</strong>), maka{' '}
-            <strong className="text-emerald-800 font-black uppercase underline">
-              Sisa Kas RIIL Likuid yang Benar-benar Ada di Dompet/Bank Bendahara Saat Ini adalah {formatRupiah(stats.saldoKasRiilAktual)}
-            </strong>
-            .
-          </p>
-        </div>
       </div>
 
-      {/* =========================================================================
-          BAGIAN 3: 5 KARTU RINGKASAN POS DANA AKTUAL
-          ========================================================================= */}
+      {/* 5 Kartu Ringkasan Pos */}
       <div className="grid grid-cols-2 lg:grid-cols-5 gap-3">
         <div className="bg-white p-4 rounded-2xl border border-slate-200 shadow-xs">
           <div className="flex items-center justify-between">
@@ -572,9 +514,7 @@ export const Dashboard: React.FC = () => {
         </div>
       </div>
 
-      {/* =========================================================================
-          BAGIAN 4: RINCIAN MASUKAN KAS & TUNGGAKAN PER BULAN (JAN - DES)
-          ========================================================================= */}
+      {/* Rincian 12 Bulan */}
       <div className="bg-white rounded-3xl border border-slate-200 p-5 md:p-6 shadow-xs space-y-4">
         <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-3 border-b pb-4">
           <div className="flex items-center space-x-2.5">
@@ -583,7 +523,7 @@ export const Dashboard: React.FC = () => {
             </div>
             <div>
               <h3 className="font-bold text-sm text-slate-900">Rincian Masukan Kas & Tunggakan Iuran Per Bulan</h3>
-              <p className="text-xs text-slate-500">Perbandingan perolehan kas lunas vs tunggakan per bulan pada tahun buku {selectedYear}.</p>
+              <p className="text-xs text-slate-500">Perbandingan perolehan kas lunas vs tunggakan tahun buku {selectedYear}.</p>
             </div>
           </div>
           <div className="text-right">
@@ -593,7 +533,6 @@ export const Dashboard: React.FC = () => {
           </div>
         </div>
 
-        {/* Grid 12 Bulan */}
         <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3">
           {stats.monthlyBreakdown.map((m) => (
             <div key={m.bulan} className="bg-slate-50 border border-slate-200 rounded-2xl p-3.5 space-y-2 hover:border-emerald-300 transition-colors">
@@ -626,52 +565,6 @@ export const Dashboard: React.FC = () => {
               </div>
             </div>
           ))}
-        </div>
-      </div>
-
-      {/* =========================================================================
-          BAGIAN 5: 3 KARTU MONITORING OPERASIONAL
-          ========================================================================= */}
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
-        {/* Target Kas Bulan Berjalan */}
-        <div className="bg-white p-5 rounded-2xl border border-slate-200 shadow-xs space-y-4">
-          <div className="flex justify-between items-center">
-            <h3 className="font-bold text-sm text-slate-800">Target Kas Bulan Berjalan</h3>
-            <span className="text-xs font-bold text-emerald-600">{stats.persentaseTargetBulanIni}%</span>
-          </div>
-          <div className="w-full h-3 bg-slate-100 rounded-full overflow-hidden">
-            <div className="h-full bg-emerald-500 rounded-full transition-all duration-500" style={{ width: `${stats.persentaseTargetBulanIni}%` }} />
-          </div>
-          <div className="grid grid-cols-2 gap-2 text-xs border-t border-slate-100 pt-3">
-            <div>
-              <p className="text-slate-400">Sudah Bayar</p>
-              <p className="font-bold text-emerald-600">{stats.bayarBulanIni} Warga</p>
-            </div>
-            <div className="text-right">
-              <p className="text-slate-400">Belum Bayar</p>
-              <p className="font-bold text-rose-500">{Math.max(0, stats.wargaWajibKas - stats.bayarBulanIni)} Warga</p>
-            </div>
-          </div>
-        </div>
-
-        {/* Pinjaman Qardhul Hasan */}
-        <div className="bg-white p-5 rounded-2xl border border-slate-200 shadow-xs space-y-3">
-          <div className="flex items-center justify-between">
-            <h3 className="font-bold text-sm text-slate-800">Pinjaman Qardhul Hasan</h3>
-            <HandCoins className="w-4 h-4 text-amber-500" />
-          </div>
-          <p className="text-xl font-bold text-amber-600">{formatRupiah(stats.totalPinjamanAktif)}</p>
-          <p className="text-xs text-slate-500">Dana sosial darurat dipinjamkan warga tanpa bunga dan memotong saldo kas riil.</p>
-        </div>
-
-        {/* Majelis Al Barokah */}
-        <div className="bg-white p-5 rounded-2xl border border-slate-200 shadow-xs space-y-3">
-          <div className="flex items-center justify-between">
-            <h3 className="font-bold text-sm text-slate-800">Majelis Al Barokah</h3>
-            <Sparkles className="w-4 h-4 text-teal-500" />
-          </div>
-          <p className="text-xl font-bold text-teal-700">{formatRupiah(stats.totalInfaqMajelisAktual)}</p>
-          <p className="text-xs text-slate-500">Penerimaan infaq pengajian rutin & donasi kegiatan Peringatan Hari Besar Islam.</p>
         </div>
       </div>
     </div>

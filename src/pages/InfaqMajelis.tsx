@@ -3,6 +3,7 @@ import { supabase, isSupabaseConfigured } from '../supabase';
 import { InfaqMajelis, formatRupiah, Pengguna, Warga } from '../types';
 import { Plus, Search, X, ExternalLink, Trash2 } from 'lucide-react';
 import { WargaSearchSelect } from '../components/WargaSearchSelect';
+import { ImageViewerModal } from '../components/ImageViewerModal';
 
 export const InfaqMajelisPage: React.FC<{ currentUser?: Pengguna }> = ({ currentUser }) => {
   const [dataList, setDataList] = useState<InfaqMajelis[]>([]);
@@ -11,6 +12,7 @@ export const InfaqMajelisPage: React.FC<{ currentUser?: Pengguna }> = ({ current
   const [showModal, setShowModal] = useState(false);
   const [search, setSearch] = useState('');
   const [isWargaDonor, setIsWargaDonor] = useState(true);
+  const [previewUrl, setPreviewUrl] = useState<string | null>(null);
 
   const [formData, setFormData] = useState({
     id_warga: '',
@@ -32,14 +34,17 @@ export const InfaqMajelisPage: React.FC<{ currentUser?: Pengguna }> = ({ current
 
     if (isSupabaseConfigured) {
       try {
-        const [resMajelis, resWarga] = await Promise.all([
-          supabase.from('infaq_majelis_albarokah').select('*').order('tanggal', { ascending: false }),
-          supabase.from('warga').select('*').order('id_rumah', { ascending: true }),
-        ]);
-        if (!resMajelis.error && resMajelis.data) loaded = resMajelis.data;
+        const resWarga = await supabase.from('warga').select('*').order('id_rumah', { ascending: true });
         if (!resWarga.error && resWarga.data) loadedWarga = resWarga.data;
+
+        // Coba infaq_majelis, lalu fallback infaq_majelis_albarokah
+        let resMajelis = await supabase.from('infaq_majelis').select('*').order('tanggal', { ascending: false });
+        if (resMajelis.error || !resMajelis.data) {
+          resMajelis = await supabase.from('infaq_majelis_albarokah').select('*').order('tanggal', { ascending: false });
+        }
+        if (!resMajelis.error && resMajelis.data) loaded = resMajelis.data;
       } catch (err) {
-        console.warn(err);
+        console.warn('Fallback offline InfaqMajelis:', err);
       }
     }
 
@@ -78,23 +83,36 @@ export const InfaqMajelisPage: React.FC<{ currentUser?: Pengguna }> = ({ current
       return;
     }
 
-    const entry: InfaqMajelis = {
-      id_infaq: Date.now(),
-      id_warga: isWargaDonor && formData.id_warga ? Number(formData.id_warga) : undefined,
+    const entryPayload = {
+      id_warga: isWargaDonor && formData.id_warga ? Number(formData.id_warga) : null,
       nama_donatur_luar: finalDonorName,
       nama_acara: formData.nama_acara,
       tanggal: formData.tanggal,
       nominal: Number(formData.nominal),
       jenis_dana: formData.jenis_dana,
       keterangan: formData.keterangan || `Infaq Majelis - ${finalDonorName}`,
-      bukti_nota: formData.bukti_nota,
+      bukti_nota: formData.bukti_nota || '',
+      diinput_oleh: currentUser?.id_pengguna || 1
     };
 
+    let generatedId = Date.now();
+
     if (isSupabaseConfigured) {
-      await supabase.from('infaq_majelis_albarokah').insert([entry]);
+      try {
+        const { data } = await supabase.from('infaq_majelis').insert([entryPayload]).select();
+        if (data && data[0]) generatedId = data[0].id_infaq;
+      } catch (e) {
+        console.warn('Fallback offline infaq insert:', e);
+      }
     }
 
-    const updated = [entry, ...dataList];
+    const localEntry: InfaqMajelis = {
+      id_infaq: generatedId,
+      ...entryPayload,
+      id_warga: entryPayload.id_warga || undefined,
+    };
+
+    const updated = [localEntry, ...dataList];
     setDataList(updated);
     localStorage.setItem('local_majelis', JSON.stringify(updated));
     setShowModal(false);
@@ -113,7 +131,7 @@ export const InfaqMajelisPage: React.FC<{ currentUser?: Pengguna }> = ({ current
   const handleDelete = async (id: number) => {
     if (!confirm('Hapus data infaq majelis ini?')) return;
     if (isSupabaseConfigured) {
-      await supabase.from('infaq_majelis_albarokah').delete().eq('id_infaq', id);
+      await supabase.from('infaq_majelis').delete().eq('id_infaq', id);
     }
     const updated = dataList.filter(d => d.id_infaq !== id);
     setDataList(updated);
@@ -180,11 +198,15 @@ export const InfaqMajelisPage: React.FC<{ currentUser?: Pengguna }> = ({ current
                     <td className="px-4 py-3.5 text-teal-700 font-medium">{item.nama_donatur_luar || '-'}</td>
                     <td className="px-4 py-3.5 text-right font-black text-emerald-600">+{formatRupiah(item.nominal)}</td>
                     <td className="px-4 py-3.5 text-center">
-                      {item.bukti_nota && item.bukti_nota.startsWith('http') ? (
-                        <a href={item.bukti_nota} target="_blank" rel="noreferrer" className="text-teal-600 hover:underline inline-flex items-center space-x-1">
+                      {item.bukti_nota && item.bukti_nota.trim() !== '' ? (
+                        <button
+                          type="button"
+                          onClick={() => setPreviewUrl(item.bukti_nota!)}
+                          className="text-teal-600 hover:underline inline-flex items-center space-x-1 font-semibold"
+                        >
                           <ExternalLink className="w-3.5 h-3.5" />
-                          <span>Link</span>
-                        </a>
+                          <span>Lihat</span>
+                        </button>
                       ) : '-'}
                     </td>
                     {canEdit && (
@@ -202,7 +224,7 @@ export const InfaqMajelisPage: React.FC<{ currentUser?: Pengguna }> = ({ current
         </div>
       </div>
 
-      {/* Modal Input Infaq Majelis dengan Search Warga */}
+      {/* Modal Input Infaq */}
       {showModal && (
         <div className="fixed inset-0 bg-slate-900/50 flex items-center justify-center p-4 z-50 backdrop-blur-xs">
           <div className="bg-white rounded-2xl shadow-xl w-full max-w-md p-6 space-y-4 max-h-[90vh] overflow-y-auto">
@@ -216,7 +238,6 @@ export const InfaqMajelisPage: React.FC<{ currentUser?: Pengguna }> = ({ current
                 <input required type="text" value={formData.nama_acara} onChange={(e) => setFormData({ ...formData, nama_acara: e.target.value })} className="w-full px-3 py-2 border rounded-xl font-medium" />
               </div>
 
-              {/* Toggle Donatur: Warga Beryl atau Donatur Luar */}
               <div>
                 <div className="flex items-center justify-between mb-1.5">
                   <span className="font-bold text-slate-600">Sumber Donatur</span>
@@ -273,6 +294,11 @@ export const InfaqMajelisPage: React.FC<{ currentUser?: Pengguna }> = ({ current
                 <input type="text" placeholder="Infaq konsumsi / sound / dll" value={formData.keterangan} onChange={(e) => setFormData({ ...formData, keterangan: e.target.value })} className="w-full px-3 py-2 border rounded-xl" />
               </div>
 
+              <div>
+                <label className="block font-bold text-slate-600 mb-1">Link URL Bukti / Nota</label>
+                <input type="text" placeholder="https://..." value={formData.bukti_nota} onChange={(e) => setFormData({ ...formData, bukti_nota: e.target.value })} className="w-full px-3 py-2 border rounded-xl" />
+              </div>
+
               <div className="flex justify-end space-x-2 pt-3 border-t">
                 <button type="button" onClick={() => setShowModal(false)} className="px-4 py-2 border rounded-xl font-bold">Batal</button>
                 <button type="submit" className="px-4 py-2 bg-teal-600 hover:bg-teal-700 text-white rounded-xl font-bold">Simpan Infaq</button>
@@ -281,6 +307,9 @@ export const InfaqMajelisPage: React.FC<{ currentUser?: Pengguna }> = ({ current
           </div>
         </div>
       )}
+
+      {/* Modal Preview Gambar / Tautan */}
+      <ImageViewerModal url={previewUrl} onClose={() => setPreviewUrl(null)} />
     </div>
   );
 };

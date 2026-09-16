@@ -1,11 +1,10 @@
 // src/types.ts
-export type PeranPengguna = 'Super_Admin' | 'Admin_Keuangan' | 'Admin_Kependudukan' | 'Warga';
+export type PeranPengguna = 'Super_Admin' | 'Admin_Keuangan' | 'Admin_Kependudukan' | 'Satpam' | 'Warga';
 
 export type StatusWarga = 'Menetap' | 'Penyewa' | 'Kosong' | 'Kunjungan' | 'Pindahan' | string;
 export type PosPengeluaran = 'Operasional_Warga' | 'Sosial_Warga' | 'Acara_Warga' | 'Acara_Majelis_Albarokah';
 export type StatusPinjaman = 'Berjalan' | 'Lunas' | 'Macet';
 
-// Tipe Data Anggota Keluarga
 export interface AnggotaKeluarga {
   id_anggota?: string | number;
   nama: string;
@@ -17,13 +16,12 @@ export interface AnggotaKeluarga {
   keterangan?: string;
 }
 
-// Tipe Data Kendaraan Warga
 export interface KendaraanWarga {
   id_kendaraan?: string | number;
   jenis: 'Mobil' | 'Motor' | 'Sepeda Listrik' | 'Lainnya';
-  nomor_polisi: string; // Plat Nomor (misal: B 1234 XYZ)
-  merk_model?: string;  // Misal: Honda HR-V / Yamaha NMAX
-  warna?: string;       // Misal: Hitam / Putih
+  nomor_polisi: string;
+  merk_model?: string;
+  warna?: string;
 }
 
 export interface Pengguna {
@@ -43,7 +41,6 @@ export interface Rumah {
   tgl_mulai_huni: string;
 }
 
-// Data Warga Lengkap
 export interface Warga {
   id_warga: number;
   id_rumah: string;
@@ -94,6 +91,7 @@ export interface DanaAcara {
   nominal: number;
   keterangan: string;
   bukti_nota?: string;
+  diinput_oleh?: number;
 }
 
 export interface InfaqMajelis {
@@ -107,6 +105,7 @@ export interface InfaqMajelis {
   jenis_dana: 'Pemasukan' | 'Pengeluaran';
   keterangan: string;
   bukti_nota?: string;
+  diinput_oleh?: number;
 }
 
 export interface Pengeluaran {
@@ -116,6 +115,7 @@ export interface Pengeluaran {
   keperluan: string;
   nominal: number;
   bukti_nota?: string;
+  diinput_oleh?: number;
 }
 
 export interface PinjamanWarga {
@@ -136,6 +136,23 @@ export interface CicilanPinjaman {
   tanggal_bayar: string;
   nominal: number;
   catatan?: string;
+}
+
+export interface Pengurus {
+  id_pengurus: number;
+  jabatan: string;
+  nama_pengurus: string;
+  periode: string;
+  kontak: string;
+}
+
+export interface Tamu {
+  id_tamu: number;
+  nama_tamu: string;
+  id_rumah_tujuan: string;
+  waktu_masuk: string;
+  waktu_keluar: string | null;
+  titip_identitas: string;
 }
 
 export const formatRupiah = (amount: number): string => {

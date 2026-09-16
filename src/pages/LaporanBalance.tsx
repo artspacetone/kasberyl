@@ -20,13 +20,24 @@ export const LaporanBalance: React.FC = () => {
 
       if (isSupabaseConfigured) {
         try {
-          const [resKas, resMajelis, resAcara, resPengeluaran, resPinjaman] = await Promise.all([
-            supabase.from('kas_warga_beryl').select('*'),
-            supabase.from('infaq_majelis_albarokah').select('*'),
+          // Query kas_warga dengan fallback ke kas_warga_beryl
+          let resKas = await supabase.from('kas_warga').select('*');
+          if (resKas.error || !resKas.data) {
+            resKas = await supabase.from('kas_warga_beryl').select('*');
+          }
+
+          // Query infaq_majelis dengan fallback ke infaq_majelis_albarokah
+          let resMajelis = await supabase.from('infaq_majelis').select('*');
+          if (resMajelis.error || !resMajelis.data) {
+            resMajelis = await supabase.from('infaq_majelis_albarokah').select('*');
+          }
+
+          const [resAcara, resPengeluaran, resPinjaman] = await Promise.all([
             supabase.from('dana_acara').select('*'),
             supabase.from('pengeluaran').select('*'),
             supabase.from('pinjaman_warga').select('*'),
           ]);
+
           if (resKas.data) loadedK = resKas.data;
           if (resMajelis.data) loadedM = resMajelis.data;
           if (resAcara.data) loadedA = resAcara.data;

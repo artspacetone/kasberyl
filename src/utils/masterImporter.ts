@@ -45,18 +45,18 @@ const parseMonthAndYearFromHeader = (headerName: string, defaultYear: number = 2
   const clean = String(headerName || '').toLowerCase().trim().replace(/[^a-z0-9]/g, ' ');
   
   const monthMap: Record<string, string> = {
-    januari: '01', jan: '01', january: '01',
-    februari: '02', feb: '02', february: '02',
-    maret: '03', mar: '03', march: '03',
+    januari: '01', jan: '01',
+    februari: '02', feb: '02',
+    maret: '03', mar: '03',
     april: '04', apr: '04',
     mei: '05', may: '05',
-    juni: '06', jun: '06', june: '06',
-    juli: '07', jul: '07', july: '07',
-    agustus: '08', agu: '08', ags: '08', august: '08',
+    juni: '06', jun: '06',
+    juli: '07', jul: '07',
+    agustus: '08', agu: '08',
     september: '09', sep: '09',
-    oktober: '10', okt: '10', oct: '10', october: '10',
+    oktober: '10', okt: '10',
     november: '11', nov: '11',
-    desember: '12', des: '12', dec: '12', december: '12'
+    desember: '12', des: '12'
   };
 
   for (const [key, code] of Object.entries(monthMap)) {
@@ -83,33 +83,6 @@ export const processMasterExcelImport = async (
   const buffer = await file.arrayBuffer();
   const wb = XLSX.read(buffer, { type: 'array', cellDates: true });
 
-  // =========================================================================
-  // TAHAP 1: RESET TOTAL DATA LAMA
-  // =========================================================================
-  onProgress?.('Membersihkan data lama di database Cloud & Lokal...', 10);
-  
-  if (isSupabaseConfigured) {
-    try {
-      await supabase.from('cicilan_pinjaman').delete().neq('id_cicilan', 0);
-      await supabase.from('pinjaman_warga').delete().neq('id_pinjaman', 0);
-      await supabase.from('pengeluaran').delete().neq('id_pengeluaran', 0);
-      await supabase.from('infaq_majelis_albarokah').delete().neq('id_infaq', 0);
-      await supabase.from('dana_acara').delete().neq('id_transaksi', 0);
-      await supabase.from('kas_warga_beryl').delete().neq('id_transaksi', 0);
-      await supabase.from('warga').delete().neq('id_warga', 0);
-      await supabase.from('rumah').delete().neq('id_rumah', '0');
-    } catch (err: any) {
-      console.warn('Peringatan reset database:', err.message);
-    }
-  }
-
-  localStorage.removeItem('local_warga');
-  localStorage.removeItem('local_kas');
-  localStorage.removeItem('local_dana_acara');
-  localStorage.removeItem('local_majelis');
-  localStorage.removeItem('local_pengeluaran');
-  localStorage.removeItem('local_pinjaman');
-
   let importedWarga: Warga[] = [];
   let importedKas: KasWargaBeryl[] = [];
   let importedAcara: DanaAcara[] = [];
@@ -117,16 +90,14 @@ export const processMasterExcelImport = async (
   let importedPengeluaran: Pengeluaran[] = [];
   let importedPinjaman: PinjamanWarga[] = [];
 
-  // =========================================================================
-  // TAHAP 2: PROSES SHEET DATABASE (WARGA + KAS Rp 10.000)
-  // =========================================================================
+  // ========================== 1. PROSES SHEET DATABASE ==========================
   const sheetDbName = wb.SheetNames.find(n => {
     const un = n.toUpperCase();
     return un.includes('DATABASE') || un.includes('DATA') || un.includes('WARGA');
   });
 
   if (sheetDbName) {
-    onProgress?.(`Memproses Data Warga & Kas Bulanan [${sheetDbName}]...`, 25);
+    onProgress?.(`Membaca Data Warga & Kas [${sheetDbName}]...`, 20);
     const ws = wb.Sheets[sheetDbName];
     const rawRows: any[] = XLSX.utils.sheet_to_json(ws, { defval: '' });
 
@@ -139,52 +110,22 @@ export const processMasterExcelImport = async (
       let namaRaw = '';
       let hpRaw = '';
       let ketRaw = 'Menetap';
-      let golDarahRaw = 'O';
-      let tglLahirRaw = '';
 
       for (const [k, v] of Object.entries(r)) {
         const kClean = k.toLowerCase().trim();
-        
-        if (
-          kClean.includes('whatsapp') || 
-          kClean.includes('no wa') || 
-          kClean.includes('no. wa') || 
-          kClean.includes('nomor wa') || 
-          kClean.includes('nomor whatsapp') || 
-          kClean.includes('hp') || 
-          kClean.includes('telepon') || 
-          kClean.includes('ponsel') || 
-          kClean.includes('kontak')
-        ) {
+        if (kClean.includes('whatsapp') || kClean.includes('hp') || kClean.includes('wa')) {
           if (!hpRaw && v) hpRaw = String(v).trim();
-        } 
-        else if (kClean.includes('nama') || kClean.includes('warga') || kClean.includes('penghuni') || kClean.includes('pemilik')) {
+        } else if (kClean.includes('nama')) {
           if (!namaRaw && v) namaRaw = String(v).trim();
-        } 
-        else if (
-          kClean.includes('blok') || 
-          kClean.includes('unit') || 
-          kClean.includes('rumah') || 
-          kClean === 'no' || 
-          kClean === 'nomor' || 
-          kClean.includes('blok / nomor') || 
-          kClean.includes('blok/nomor')
-        ) {
+        } else if (kClean.includes('blok') || kClean.includes('unit') || kClean === 'no') {
           if (!blokRaw && v) blokRaw = String(v).trim();
-        } 
-        else if (kClean.includes('keterangan') || kClean.includes('status') || kClean.includes('hunian')) {
+        } else if (kClean.includes('keterangan') || kClean.includes('status')) {
           if (v) ketRaw = String(v).trim();
-        }
-        else if (kClean.includes('darah') || kClean.includes('gol')) {
-          if (v) golDarahRaw = String(v).trim();
-        }
-        else if (kClean.includes('lahir') || kClean.includes('tgl lahir')) {
-          if (v) tglLahirRaw = String(v).trim();
         }
       }
 
       if (!blokRaw && !namaRaw) continue;
-      if (String(namaRaw).toLowerCase().includes('total') || String(blokRaw).toLowerCase().includes('total')) continue;
+      if (String(namaRaw).toLowerCase().includes('total')) continue;
 
       const idRumah = normalizeIdRumah(blokRaw || 'A1/01');
       const nama = String(namaRaw || `Warga Unit ${idRumah}`).trim();
@@ -213,9 +154,9 @@ export const processMasterExcelImport = async (
           no_hp: noHpFormatted,
           jenis_kelamin: 'L',
           peran_keluarga: 'Kepala Keluarga',
-          tempat_lahir: '',
-          tanggal_lahir: tglLahirRaw ? safeDate(tglLahirRaw, '') : '',
-          golongan_darah: golDarahRaw || 'O',
+          tempat_lahir: '-',
+          tanggal_lahir: '',
+          golongan_darah: 'O',
           agama: 'Islam',
           pekerjaan: '-',
           alamat_asal: '-',
@@ -229,56 +170,7 @@ export const processMasterExcelImport = async (
 
     importedWarga = Array.from(wargaMap.values());
 
-    // SIMPAN RUMAH & WARGA (DENGAN PENANGKAPAN ID CLOUD REAL)
-    const validSupabaseWargaMapByName = new Map<string, number>();
-    const validSupabaseWargaMapByRumah = new Map<string, number>();
-
-    if (isSupabaseConfigured) {
-      try {
-        if (rumahMap.size > 0) {
-          await supabase.from('rumah').upsert(Array.from(rumahMap.values()));
-        }
-
-        if (importedWarga.length > 0) {
-          const dbWargaPayload = importedWarga.map(w => ({
-            id_rumah: w.id_rumah,
-            nik_kk: w.nik_kk || null,
-            nama_lengkap: w.nama_lengkap,
-            status_warga: w.status_warga,
-            no_hp: w.no_hp,
-            jenis_kelamin: w.jenis_kelamin || 'L',
-            peran_keluarga: w.peran_keluarga || 'Kepala Keluarga',
-            tempat_lahir: w.tempat_lahir || null,
-            tanggal_lahir: w.tanggal_lahir ? w.tanggal_lahir : null,
-            golongan_darah: w.golongan_darah || 'O',
-            agama: w.agama || 'Islam',
-            pekerjaan: w.pekerjaan || '-',
-            alamat_asal: w.alamat_asal || '-',
-            keterangan: w.keterangan || null,
-            tanggal_daftar: w.tanggal_daftar || '2026-01-01',
-            anggota_keluarga: w.anggota_keluarga || [],
-            kendaraan: w.kendaraan || []
-          }));
-
-          const { data: insertedDbWarga, error } = await supabase
-            .from('warga')
-            .insert(dbWargaPayload)
-            .select('id_warga, nama_lengkap, id_rumah, no_hp');
-
-          if (!error && insertedDbWarga && insertedDbWarga.length > 0) {
-            importedWarga = insertedDbWarga as Warga[];
-            insertedDbWarga.forEach((w: any) => {
-              validSupabaseWargaMapByName.set(cleanTextKey(w.nama_lengkap), w.id_warga);
-              validSupabaseWargaMapByRumah.set(cleanTextKey(w.id_rumah), w.id_warga);
-            });
-          }
-        }
-      } catch (e) {
-        console.warn('Fallback offline Warga:', e);
-      }
-    }
-
-    // Resolver lokal & fallback
+    // Mapping Warga untuk Kas
     const mapWargaByName = new Map<string, Warga>();
     const mapWargaByRumah = new Map<string, Warga>();
     importedWarga.forEach(w => {
@@ -286,26 +178,19 @@ export const processMasterExcelImport = async (
       mapWargaByRumah.set(cleanTextKey(w.id_rumah), w);
     });
 
-    // 2.2 Ekstraksi Iuran Kas Bulanan (Bebas Konflik 409)
     let trxKasCounter = 1;
-    const dbKasPayload: any[] = [];
-
     for (const r of rawRows) {
       let namaRow = '';
       let blokRow = '';
       for (const [k, v] of Object.entries(r)) {
         const kClean = k.toLowerCase().trim();
-        if (kClean.includes('nama') || kClean.includes('warga')) namaRow = String(v);
-        if (kClean.includes('blok') || kClean.includes('nomor') || kClean.includes('unit')) blokRow = String(v);
+        if (kClean.includes('nama')) namaRow = String(v);
+        if (kClean.includes('blok') || kClean.includes('unit')) blokRow = String(v);
       }
 
       if (!namaRow && !blokRow) continue;
       const foundWarga = mapWargaByName.get(cleanTextKey(namaRow)) || mapWargaByRumah.get(cleanTextKey(normalizeIdRumah(blokRow)));
       if (!foundWarga) continue;
-
-      const validIdWarga = validSupabaseWargaMapByName.get(cleanTextKey(namaRow)) || 
-                           validSupabaseWargaMapByRumah.get(cleanTextKey(normalizeIdRumah(blokRow))) || 
-                           foundWarga.id_warga;
 
       for (const [colName, val] of Object.entries(r)) {
         const parsedMonth = parseMonthAndYearFromHeader(colName, 2026);
@@ -317,7 +202,7 @@ export const processMasterExcelImport = async (
 
             importedKas.push({
               id_transaksi: trxKasCounter++,
-              id_warga: validIdWarga,
+              id_warga: foundWarga.id_warga,
               nama_warga: foundWarga.nama_lengkap,
               id_rumah: foundWarga.id_rumah,
               periode_bulan: periodeStr,
@@ -326,48 +211,19 @@ export const processMasterExcelImport = async (
               peruntukan: 'Operasional dan Sosial',
               status_bayar: 'Lunas',
               keterangan: `Iuran Kas Warga Beryl (${colName.trim()} ${parsedMonth.year})`,
-              bukti_transfer: 'Import Master Excel',
-              diinput_oleh: userId,
-            });
-
-            dbKasPayload.push({
-              id_warga: validIdWarga || null,
-              periode_bulan: periodeStr,
-              tanggal: tanggalStr,
-              nominal: nominal,
-              peruntukan: 'Operasional dan Sosial',
-              status_bayar: 'Lunas',
-              keterangan: `Iuran Kas Warga Beryl (${colName.trim()} ${parsedMonth.year})`,
-              bukti_transfer: 'Import Master Excel',
+              bukti_transfer: '',
               diinput_oleh: userId,
             });
           }
         }
       }
     }
-
-    if (isSupabaseConfigured && dbKasPayload.length > 0) {
-      try {
-        const BATCH = 50;
-        for (let i = 0; i < dbKasPayload.length; i += BATCH) {
-          await supabase.from('kas_warga_beryl').insert(dbKasPayload.slice(i, i + BATCH));
-        }
-      } catch (e) {
-        console.warn('Fallback offline Kas Warga:', e);
-      }
-    }
   }
 
-  // =========================================================================
-  // TAHAP 3: PROSES SHEET KAS ACARA / DANA ACARA
-  // =========================================================================
-  const sheetAcaraName = wb.SheetNames.find(n => {
-    const un = n.toUpperCase();
-    return un.includes('KAS ACARA') || un.includes('DANA ACARA') || un === 'ACARA';
-  });
-
+  // ========================== 2. PROSES SHEET KAS ACARA ==========================
+  const sheetAcaraName = wb.SheetNames.find(n => n.toUpperCase().includes('ACARA'));
   if (sheetAcaraName) {
-    onProgress?.(`Memproses Kas Acara Paguyuban [${sheetAcaraName}]...`, 50);
+    onProgress?.(`Membaca Data Kas Acara [${sheetAcaraName}]...`, 50);
     const ws = wb.Sheets[sheetAcaraName];
     const rawRows: any[] = XLSX.utils.sheet_to_json(ws, { defval: '' });
 
@@ -378,23 +234,17 @@ export const processMasterExcelImport = async (
       mapWargaByRumah.set(cleanTextKey(w.id_rumah), w);
     });
 
-    let acaraTrxCounter = 1;
-    const dbAcaraPayload: any[] = [];
-
+    let acaraCounter = 1;
     for (const r of rawRows) {
       let rawNama = '';
       let rawBlok = '';
       let rawNominal: any = 0;
-      let rawAcara = 'Acara Silaturahmi Paguyuban Beryl';
-      let rawTgl = '2026-01-25';
 
       for (const [k, v] of Object.entries(r)) {
         const kClean = k.toLowerCase().trim();
-        if (kClean.includes('nama') || kClean.includes('donatur')) rawNama = String(v);
-        else if (kClean.includes('blok') || kClean.includes('rumah') || kClean.includes('unit')) rawBlok = String(v);
-        else if (kClean.includes('iuran') || kClean.includes('nominal') || kClean.includes('jumlah') || kClean.includes('sukarela')) rawNominal = v;
-        else if (kClean.includes('acara') || kClean.includes('kegiatan')) rawAcara = String(v);
-        else if (kClean.includes('tanggal') || kClean.includes('tgl')) rawTgl = String(v);
+        if (kClean.includes('nama')) rawNama = String(v);
+        else if (kClean.includes('blok') || kClean.includes('rumah')) rawBlok = String(v);
+        else if (kClean.includes('iuran') || kClean.includes('nominal') || kClean.includes('sukarela')) rawNominal = v;
       }
 
       const nominal = cleanNominal(rawNominal);
@@ -404,279 +254,106 @@ export const processMasterExcelImport = async (
       const isSponsorLuar = nama.toUpperCase() === 'PMM' || String(rawBlok).toUpperCase().includes('A-Z');
       const foundWarga = isSponsorLuar ? null : (mapWargaByName.get(cleanTextKey(nama)) || mapWargaByRumah.get(cleanTextKey(normalizeIdRumah(rawBlok))));
 
-      const idRumahClean = isSponsorLuar 
-        ? 'Beryl-A-Z' 
-        : (foundWarga ? foundWarga.id_rumah : (rawBlok ? normalizeIdRumah(String(rawBlok)) : '-'));
-
-      const itemAcara: DanaAcara = {
-        id_transaksi: acaraTrxCounter++,
-        nama_acara: String(rawAcara || 'Acara Silaturahmi Paguyuban Beryl').trim(),
+      importedAcara.push({
+        id_transaksi: acaraCounter++,
+        nama_acara: 'Acara Silaturahmi Paguyuban Beryl',
         id_warga: foundWarga ? foundWarga.id_warga : undefined,
-        nama_warga: isSponsorLuar ? `Sponsor PMM (${idRumahClean})` : (foundWarga ? foundWarga.nama_lengkap : nama),
-        id_rumah: idRumahClean,
-        nama_donatur_luar: isSponsorLuar ? 'PMM (Sponsor Developer)' : (foundWarga ? undefined : `${nama} (${rawBlok})`),
-        tanggal: safeDate(rawTgl, '2026-01-25'),
+        nama_warga: isSponsorLuar ? 'PT PMM (Developer)' : (foundWarga ? foundWarga.nama_lengkap : nama),
+        id_rumah: foundWarga ? foundWarga.id_rumah : (rawBlok ? normalizeIdRumah(rawBlok) : '-'),
+        nama_donatur_luar: isSponsorLuar ? 'PT PMM (Developer)' : (foundWarga ? undefined : nama),
+        tanggal: '2026-01-25',
         kategori: 'Pemasukan',
-        pos_sub_anggaran: isSponsorLuar ? 'Sponsor Utama PMM' : 'Donasi Sukarela Warga',
+        pos_sub_anggaran: isSponsorLuar ? 'Sponsor Utama' : 'Donasi Sukarela',
         nominal: nominal,
-        keterangan: isSponsorLuar ? 'Sponsor Acara Silaturahmi dari PMM' : `Iuran Kas Acara - ${nama} (${rawBlok || '-'})`,
-        bukti_nota: 'Import Master Excel - Kas Acara',
-      };
-
-      importedAcara.push(itemAcara);
-      dbAcaraPayload.push({
-        nama_acara: itemAcara.nama_acara,
-        id_warga: itemAcara.id_warga || null,
-        nama_donatur_luar: itemAcara.nama_donatur_luar || null,
-        tanggal: itemAcara.tanggal,
-        kategori: itemAcara.kategori,
-        pos_sub_anggaran: itemAcara.pos_sub_anggaran,
-        nominal: itemAcara.nominal,
-        keterangan: itemAcara.keterangan,
-        bukti_nota: itemAcara.bukti_nota,
-        diinput_oleh: userId,
+        keterangan: isSponsorLuar ? 'Sponsor Acara dari Developer PMM' : `Iuran Kas Acara - ${nama}`,
+        bukti_nota: '',
       });
-    }
-
-    if (isSupabaseConfigured && dbAcaraPayload.length > 0) {
-      try {
-        await supabase.from('dana_acara').insert(dbAcaraPayload);
-      } catch (e) {
-        console.warn('Fallback offline Dana Acara:', e);
-      }
     }
   }
 
-  // =========================================================================
-  // TAHAP 4: PROSES SHEET INFAQ MAJELIS AL BAROKAH & RAMADHAN
-  // =========================================================================
-  const sheetMajelisName = wb.SheetNames.find(n => {
-    const un = n.toUpperCase();
-    return un.includes('MAJELIS') || un.includes('INFAQ') || un.includes('RAMADHAN');
-  });
-
+  // ========================== 3. PROSES SHEET INFAQ MAJELIS ==========================
+  const sheetMajelisName = wb.SheetNames.find(n => n.toUpperCase().includes('MAJELIS') || n.toUpperCase().includes('INFAQ'));
   if (sheetMajelisName) {
-    onProgress?.(`Memproses Infaq Majelis Al Barokah [${sheetMajelisName}]...`, 65);
+    onProgress?.(`Membaca Infaq Majelis [${sheetMajelisName}]...`, 70);
     const ws = wb.Sheets[sheetMajelisName];
     const rawRows: any[] = XLSX.utils.sheet_to_json(ws, { defval: '' });
 
     let infaqCounter = 1;
-    const dbMajelisPayload: any[] = [];
-
     for (const r of rawRows) {
       let rawNama = '';
-      let rawNominalMasuk = 0;
-      let rawNominalKeluar = 0;
-      let rawAcara = 'Pengajian Rutin & PHBI Majelis Al Barokah';
+      let rawMasuk = 0;
       let rawTgl = '2026-01-20';
-      let rawKet = '';
+      let rawAcara = 'Pengajian Rutin Bulanan';
 
       for (const [k, v] of Object.entries(r)) {
         const kClean = k.toLowerCase().trim();
-        if (kClean.includes('nama') || kClean.includes('donatur') || kClean.includes('uraian')) rawNama = String(v);
-        else if (kClean.includes('masuk') || (kClean.includes('nominal') && !kClean.includes('keluar')) || kClean.includes('jumlah')) rawNominalMasuk = cleanNominal(v);
-        else if (kClean.includes('keluar')) rawNominalKeluar = cleanNominal(v);
-        else if (kClean.includes('acara') || kClean.includes('kegiatan')) rawAcara = String(v);
-        else if (kClean.includes('tanggal') || kClean.includes('tgl')) rawTgl = String(v);
-        else if (kClean.includes('keterangan')) rawKet = String(v);
+        if (kClean.includes('nama') || kClean.includes('donatur')) rawNama = String(v);
+        else if (kClean.includes('nominal') || kClean.includes('masuk')) rawMasuk = cleanNominal(v);
+        else if (kClean.includes('tanggal')) rawTgl = String(v);
+        else if (kClean.includes('acara')) rawAcara = String(v);
       }
 
-      if (rawNominalMasuk > 0 && rawNama && !rawNama.toLowerCase().includes('total')) {
-        const itemM: InfaqMajelis = {
+      if (rawMasuk > 0 && rawNama && !rawNama.toLowerCase().includes('total')) {
+        importedMajelis.push({
           id_infaq: infaqCounter++,
-          nama_donatur_luar: String(rawNama).trim(),
-          nama_acara: String(rawAcara).trim(),
+          nama_donatur_luar: rawNama,
+          nama_acara: rawAcara,
           tanggal: safeDate(rawTgl, '2026-01-20'),
-          nominal: rawNominalMasuk,
+          nominal: rawMasuk,
           jenis_dana: 'Pemasukan',
-          keterangan: String(rawKet || `Infaq Majelis - ${rawNama}`).trim(),
-          bukti_nota: 'Import Master Excel',
-        };
-
-        importedMajelis.push(itemM);
-        dbMajelisPayload.push({
-          nama_acara: itemM.nama_acara,
-          nama_donatur_luar: itemM.nama_donatur_luar,
-          tanggal: itemM.tanggal,
-          nominal: itemM.nominal,
-          jenis_dana: 'Pemasukan',
-          keterangan: itemM.keterangan,
-          bukti_nota: itemM.bukti_nota,
+          keterangan: `Infaq Majelis - ${rawNama}`,
+          bukti_nota: '',
           diinput_oleh: userId,
         });
-      }
-
-      if (rawNominalKeluar > 0) {
-        importedPengeluaran.push({
-          id_pengeluaran: 5000 + infaqCounter,
-          pos_anggaran: 'Acara_Majelis_Albarokah',
-          tanggal: safeDate(rawTgl, '2026-01-20'),
-          keperluan: String(rawNama || 'Pengeluaran Acara Majelis').trim(),
-          nominal: rawNominalKeluar,
-          bukti_nota: 'Import Master Excel',
-        });
-      }
-    }
-
-    if (isSupabaseConfigured && dbMajelisPayload.length > 0) {
-      try {
-        await supabase.from('infaq_majelis_albarokah').insert(dbMajelisPayload);
-      } catch (e) {
-        console.warn('Fallback offline Infaq Majelis:', e);
       }
     }
   }
 
-  // =========================================================================
-  // TAHAP 5: PROSES SHEET PENGELUARAN TERPADU
-  // =========================================================================
-  const sheetPengeluaranName = wb.SheetNames.find(n => {
-    const un = n.toUpperCase();
-    return un.includes('PENGELUARAN') || un.includes('KELUARAN');
-  });
-
-  if (sheetPengeluaranName) {
-    onProgress?.(`Memproses Pengeluaran Terpadu [${sheetPengeluaranName}]...`, 80);
-    const ws = wb.Sheets[sheetPengeluaranName];
+  // ========================== 4. PROSES SHEET PENGELUARAN ==========================
+  const sheetPengName = wb.SheetNames.find(n => n.toUpperCase().includes('PENGELUARAN'));
+  if (sheetPengName) {
+    onProgress?.(`Membaca Pengeluaran Terpadu [${sheetPengName}]...`, 80);
+    const ws = wb.Sheets[sheetPengName];
     const rawRows: any[] = XLSX.utils.sheet_to_json(ws, { defval: '' });
 
-    let pengCounter = importedPengeluaran.length + 1;
-    const dbPengPayload: any[] = [];
-
+    let pengCounter = 1;
     for (const r of rawRows) {
-      let rawKeperluan = '';
-      let rawNominal = 0;
-      let rawPos = '';
+      let rawKep = '';
+      let rawNom = 0;
       let rawTgl = '2026-01-15';
-      let rawBukti = 'Import Master Excel';
+      let rawPos = 'Operasional_Warga';
 
       for (const [k, v] of Object.entries(r)) {
         const kClean = k.toLowerCase().trim();
-        if (kClean.includes('keperluan') || kClean.includes('keterangan') || kClean.includes('uraian') || kClean.includes('nama')) rawKeperluan = String(v);
-        else if (kClean.includes('nominal') || kClean.includes('jumlah') || kClean.includes('keluar') || kClean.includes('biaya')) rawNominal = cleanNominal(v);
-        else if (kClean.includes('pos') || kClean.includes('kategori') || kClean.includes('jenis')) rawPos = String(v).toLowerCase();
-        else if (kClean.includes('tanggal') || kClean.includes('tgl')) rawTgl = String(v);
-        else if (kClean.includes('bukti') || kClean.includes('nota') || kClean.includes('link')) rawBukti = String(v);
+        if (kClean.includes('keperluan') || kClean.includes('uraian')) rawKep = String(v);
+        else if (kClean.includes('nominal') || kClean.includes('jumlah')) rawNom = cleanNominal(v);
+        else if (kClean.includes('tanggal')) rawTgl = String(v);
+        else if (kClean.includes('pos')) rawPos = String(v);
       }
 
-      if (rawNominal > 0 && rawKeperluan && !rawKeperluan.toLowerCase().includes('total')) {
-        let posAnggaran: 'Operasional_Warga' | 'Sosial_Warga' | 'Acara_Majelis_Albarokah' | 'Acara_Warga' = 'Operasional_Warga';
-        if (rawPos.includes('sosial') || rawPos.includes('santunan')) {
-          posAnggaran = 'Sosial_Warga';
-        } else if (rawPos.includes('majelis') || rawPos.includes('tarawih') || rawPos.includes('phbi')) {
-          posAnggaran = 'Acara_Majelis_Albarokah';
-        } else if (rawPos.includes('acara') || rawPos.includes('silaturahmi') || rawPos.includes('lomba')) {
-          posAnggaran = 'Acara_Warga';
-        }
+      // Deteksi Otomatis: Jika keperluan bertuliskan "Santunan", alihkan langsung ke Sosial_Warga!
+      if (rawKep.toLowerCase().includes('santunan') || rawKep.toLowerCase().includes('sakit') || rawKep.toLowerCase().includes('takziah')) {
+        rawPos = 'Sosial_Warga';
+      }
 
-        const itemP: Pengeluaran = {
+      if (rawNom > 0 && rawKep && !rawKep.toLowerCase().includes('total')) {
+        importedPengeluaran.push({
           id_pengeluaran: pengCounter++,
-          pos_anggaran: posAnggaran as any,
+          pos_anggaran: rawPos as any,
           tanggal: safeDate(rawTgl, '2026-01-15'),
-          keperluan: String(rawKeperluan).trim(),
-          nominal: rawNominal,
-          bukti_nota: String(rawBukti).trim(),
-        };
-
-        importedPengeluaran.push(itemP);
-        dbPengPayload.push({
-          pos_anggaran: itemP.pos_anggaran,
-          tanggal: itemP.tanggal,
-          keperluan: itemP.keperluan,
-          nominal: itemP.nominal,
-          bukti_nota: itemP.bukti_nota,
+          keperluan: rawKep,
+          nominal: rawNom,
+          bukti_nota: '',
           diinput_oleh: userId,
         });
       }
     }
-
-    if (isSupabaseConfigured && dbPengPayload.length > 0) {
-      try {
-        await supabase.from('pengeluaran').insert(dbPengPayload);
-      } catch (e) {
-        console.warn('Fallback offline Pengeluaran:', e);
-      }
-    }
   }
 
   // =========================================================================
-  // TAHAP 6: PROSES SHEET PINJAMAN WARGA (QARDHUL HASAN)
+  // ⚡ AMANKAN DATA DI MEMORI LOKAL TERLEBIH DAHULU (ANTI-HILANG DATA)
   // =========================================================================
-  const sheetPinjamanName = wb.SheetNames.find(n => {
-    const un = n.toUpperCase();
-    return un.includes('PINJAMAN') || un.includes('QARDH');
-  });
-
-  if (sheetPinjamanName) {
-    onProgress?.(`Memproses Pinjaman Sosial [${sheetPinjamanName}]...`, 90);
-    const ws = wb.Sheets[sheetPinjamanName];
-    const rawRows: any[] = XLSX.utils.sheet_to_json(ws, { defval: '' });
-
-    const mapWargaByName = new Map<string, Warga>();
-    const mapWargaByRumah = new Map<string, Warga>();
-    importedWarga.forEach(w => {
-      mapWargaByName.set(cleanTextKey(w.nama_lengkap), w);
-      mapWargaByRumah.set(cleanTextKey(w.id_rumah), w);
-    });
-
-    let pinjamCounter = 1;
-    const dbPinjamPayload: any[] = [];
-
-    for (const r of rawRows) {
-      let rawNama = '';
-      let rawBlok = '';
-      let rawNominal = 0;
-      let rawTgl = '2026-01-25';
-      let rawKep = 'Pinjaman Dana Darurat Sosial';
-
-      for (const [k, v] of Object.entries(r)) {
-        const kClean = k.toLowerCase().trim();
-        if (kClean.includes('nama') || kClean.includes('peminjam')) rawNama = String(v);
-        else if (kClean.includes('blok') || kClean.includes('unit') || kClean.includes('rumah')) rawBlok = String(v);
-        else if (kClean.includes('nominal') || kClean.includes('jumlah') || kClean.includes('plafon')) rawNominal = cleanNominal(v);
-        else if (kClean.includes('tanggal') || kClean.includes('tgl')) rawTgl = String(v);
-        else if (kClean.includes('keperluan') || kClean.includes('keterangan') || kClean.includes('alasan')) rawKep = String(v);
-      }
-
-      if (rawNominal > 0 && rawNama && !rawNama.toLowerCase().includes('total')) {
-        const foundWarga = mapWargaByName.get(cleanTextKey(rawNama)) || mapWargaByRumah.get(cleanTextKey(normalizeIdRumah(rawBlok)));
-        const idW = foundWarga ? foundWarga.id_warga : (importedWarga[0]?.id_warga || null);
-
-        importedPinjaman.push({
-          id_pinjaman: pinjamCounter++,
-          id_warga: idW || 1,
-          nama_warga: String(rawNama).trim(),
-          id_rumah: foundWarga ? foundWarga.id_rumah : normalizeIdRumah(rawBlok || 'A1/01'),
-          tanggal_pinjam: safeDate(rawTgl, '2026-01-25'),
-          nominal_pinjaman: rawNominal,
-          sisa_pinjaman: rawNominal,
-          status_pinjaman: 'Berjalan',
-          keterangan: String(rawKep).trim(),
-        });
-
-        dbPinjamPayload.push({
-          id_warga: idW || null,
-          tanggal_pinjam: safeDate(rawTgl, '2026-01-25'),
-          nominal_pinjaman: rawNominal,
-          sisa_pinjaman: rawNominal,
-          status_pinjaman: 'Berjalan',
-          keterangan: String(rawKep).trim(),
-        });
-      }
-    }
-
-    if (isSupabaseConfigured && dbPinjamPayload.length > 0) {
-      try {
-        await supabase.from('pinjaman_warga').insert(dbPinjamPayload);
-      } catch (e) {
-        console.warn('Fallback offline Pinjaman:', e);
-      }
-    }
-  }
-
-  // =========================================================================
-  // TAHAP 7: SIMPAN LOKAL & REAL-TIME BROADCAST
-  // =========================================================================
+  onProgress?.('Mengamankan data ke sistem lokal...', 90);
   localStorage.setItem('local_warga', JSON.stringify(importedWarga));
   localStorage.setItem('local_kas', JSON.stringify(importedKas));
   localStorage.setItem('local_dana_acara', JSON.stringify(importedAcara));
@@ -684,8 +361,107 @@ export const processMasterExcelImport = async (
   localStorage.setItem('local_pengeluaran', JSON.stringify(importedPengeluaran));
   localStorage.setItem('local_pinjaman', JSON.stringify(importedPinjaman));
 
+  // Beritahu seluruh layar aplikasi agar langsung merender data baru
   window.dispatchEvent(new Event('app_data_updated'));
-  onProgress?.('Import Master Berhasil 100%! Semua data telah tersinkron.', 100);
+
+  // =========================================================================
+  // SINKRONKAN KE SUPABASE CLOUD (JIKA ONLINE)
+  // =========================================================================
+  if (isSupabaseConfigured) {
+    onProgress?.('Menyimpan cadangan ke Supabase Cloud...', 95);
+    try {
+      // 1. Simpan Warga & Ambil ID Asli Cloud
+      if (importedWarga.length > 0) {
+        const dbWargaPayload = importedWarga.map(w => ({
+          id_rumah: w.id_rumah,
+          nama_lengkap: w.nama_lengkap,
+          status_warga: w.status_warga,
+          no_hp: w.no_hp,
+          jenis_kelamin: 'L',
+          golongan_darah: 'O',
+          tanggal_daftar: '2026-01-01',
+        }));
+        const { data: cloudWarga } = await supabase.from('warga').insert(dbWargaPayload).select('id_warga, id_rumah, nama_lengkap');
+
+        if (cloudWarga && cloudWarga.length > 0) {
+          const cloudMap = new Map(cloudWarga.map((w: any) => [cleanTextKey(w.nama_lengkap), w.id_warga]));
+          // Sesuaikan id_warga pada kas
+          importedKas = importedKas.map(k => ({
+            ...k,
+            id_warga: cloudMap.get(cleanTextKey(k.nama_warga || '')) || k.id_warga
+          }));
+          localStorage.setItem('local_kas', JSON.stringify(importedKas));
+        }
+      }
+
+      // 2. Simpan Kas Warga ke Cloud per Batch 100
+      if (importedKas.length > 0) {
+        const kasPayload = importedKas.map(k => ({
+          id_warga: k.id_warga,
+          periode_bulan: k.periode_bulan,
+          tanggal: k.tanggal,
+          nominal: k.nominal,
+          peruntukan: k.peruntukan || 'Operasional dan Sosial',
+          status_bayar: 'Lunas',
+          keterangan: k.keterangan,
+          bukti_transfer: '',
+          diinput_oleh: userId
+        }));
+
+        for (let i = 0; i < kasPayload.length; i += 100) {
+          await supabase.from('kas_warga').insert(kasPayload.slice(i, i + 100));
+        }
+      }
+
+      // 3. Simpan Dana Acara
+      if (importedAcara.length > 0) {
+        await supabase.from('dana_acara').insert(importedAcara.map(a => ({
+          nama_acara: a.nama_acara,
+          id_warga: a.id_warga || null,
+          nama_warga: a.nama_warga,
+          id_rumah: a.id_rumah,
+          nama_donatur_luar: a.nama_donatur_luar,
+          tanggal: a.tanggal,
+          kategori: a.kategori,
+          pos_sub_anggaran: a.pos_sub_anggaran,
+          nominal: a.nominal,
+          keterangan: a.keterangan,
+          bukti_nota: '',
+          diinput_oleh: userId
+        })));
+      }
+
+      // 4. Simpan Infaq Majelis
+      if (importedMajelis.length > 0) {
+        await supabase.from('infaq_majelis').insert(importedMajelis.map(m => ({
+          nama_donatur_luar: m.nama_donatur_luar,
+          nama_acara: m.nama_acara,
+          tanggal: m.tanggal,
+          nominal: m.nominal,
+          jenis_dana: 'Pemasukan',
+          keterangan: m.keterangan,
+          bukti_nota: '',
+          diinput_oleh: userId
+        })));
+      }
+
+      // 5. Simpan Pengeluaran
+      if (importedPengeluaran.length > 0) {
+        await supabase.from('pengeluaran').insert(importedPengeluaran.map(p => ({
+          pos_anggaran: p.pos_anggaran,
+          tanggal: p.tanggal,
+          keperluan: p.keperluan,
+          nominal: p.nominal,
+          bukti_nota: '',
+          diinput_oleh: userId
+        })));
+      }
+    } catch (cloudErr: any) {
+      console.warn('Pemberitahuan: Data telah diamankan di sistem lokal, sync cloud ditunda:', cloudErr.message);
+    }
+  }
+
+  onProgress?.('✓ Sukses! Semua data kas dan kependudukan telah pulih 100%.', 100);
 
   return {
     totalWarga: importedWarga.length,

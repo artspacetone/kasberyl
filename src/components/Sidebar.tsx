@@ -2,10 +2,11 @@
 import React from 'react';
 import { 
   LayoutDashboard, Users, HeartHandshake, Calendar, Landmark, 
-  ArrowDownCircle, HandCoins, Scale, BookOpen, FileSpreadsheet, X, Lock
+  ArrowDownCircle, HandCoins, Scale, BookOpen, FileSpreadsheet, 
+  X, Shield, Network, UserCog 
 } from 'lucide-react';
 import { cn } from '../lib/utils';
-import { Pengguna, canAccessFinance } from '../types';
+import { Pengguna } from '../types';
 
 interface SidebarProps {
   activeTab: string;
@@ -22,27 +23,30 @@ export const Sidebar: React.FC<SidebarProps> = ({
   setMobileOpen,
   currentUser
 }) => {
-  const financeAllowed = canAccessFinance(currentUser);
   const isSuperAdmin = currentUser.peran === 'Super_Admin';
 
+  // SEMUA MODUL TERBUKA UNTUK DILIHAT (VIEW-ONLY PADA MODE WARGA)
   const menuItems = [
-    { id: 'dashboard', label: 'Dashboard Balance', icon: LayoutDashboard, locked: false },
-    { id: 'warga', label: 'Data Warga Beryl', icon: Users, locked: false },
-    { id: 'infaq_bulanan', label: 'Kas Warga (Rp 10rb)', icon: HeartHandshake, locked: !financeAllowed },
-    { id: 'dana_acara', label: 'Dana Acara Warga', icon: Calendar, locked: !financeAllowed },
-    { id: 'infaq_majelis', label: 'Majelis Al Barokah', icon: Landmark, locked: !financeAllowed },
-    { id: 'pengeluaran', label: 'Pengeluaran Terpadu', icon: ArrowDownCircle, locked: !financeAllowed },
-    { id: 'pinjaman', label: 'Pinjaman (Qardh)', icon: HandCoins, locked: !financeAllowed },
-    { id: 'laporan', label: 'Laporan & Balance', icon: Scale, locked: !financeAllowed },
-    { id: 'adart', label: 'AD / ART Paguyuban', icon: BookOpen, locked: false },
-    { id: 'import', label: '1x Import & Backup', icon: FileSpreadsheet, locked: !financeAllowed && !isSuperAdmin },
+    { id: 'dashboard', label: 'Dashboard Balance', icon: LayoutDashboard, show: true },
+    { id: 'warga', label: 'Data Warga Beryl', icon: Users, show: true },
+    { id: 'infaq_bulanan', label: 'Kas Warga (Rp 10rb)', icon: HeartHandshake, show: true },
+    { id: 'dana_acara', label: 'Dana Acara Warga', icon: Calendar, show: true },
+    { id: 'infaq_majelis', label: 'Majelis Al Barokah', icon: Landmark, show: true },
+    { id: 'pengeluaran', label: 'Pengeluaran Terpadu', icon: ArrowDownCircle, show: true },
+    { id: 'pinjaman', label: 'Pinjaman (Qardh)', icon: HandCoins, show: true },
+    { id: 'laporan', label: 'Laporan & Balance', icon: Scale, show: true },
+    { id: 'keamanan', label: 'Log Keamanan Satpam', icon: Shield, show: true },
+    { id: 'organisasi', label: 'Struktur Organisasi', icon: Network, show: true },
+    { id: 'pengguna', label: 'Manajemen Akun', icon: UserCog, show: isSuperAdmin },
+    { id: 'adart', label: 'AD / ART Paguyuban', icon: BookOpen, show: true },
+    { id: 'import', label: '1x Import & Backup', icon: FileSpreadsheet, show: true },
   ];
 
   return (
     <>
       {mobileOpen && (
         <div 
-          className="fixed inset-0 bg-slate-900/70 z-40 lg:hidden backdrop-blur-xs"
+          className="fixed inset-0 bg-slate-900/70 z-50 lg:hidden backdrop-blur-xs"
           onClick={() => setMobileOpen(false)}
         />
       )}
@@ -76,47 +80,42 @@ export const Sidebar: React.FC<SidebarProps> = ({
             currentUser.peran === 'Super_Admin' ? 'bg-purple-900/60 text-purple-300 border border-purple-700' :
             currentUser.peran === 'Admin_Keuangan' ? 'bg-emerald-900/60 text-emerald-300 border border-emerald-700' :
             currentUser.peran === 'Admin_Kependudukan' ? 'bg-blue-900/60 text-blue-300 border border-blue-700' :
-            'bg-amber-900/60 text-amber-300 border border-amber-700'
+            currentUser.peran === 'Satpam' ? 'bg-amber-900/60 text-amber-300 border border-amber-700' :
+            'bg-emerald-900/60 text-emerald-300 border border-emerald-700'
           )}>
-            {currentUser.peran.replace('_', ' ')}
+            {currentUser.peran === 'Warga' ? 'Warga (View Only)' : currentUser.peran.replace('_', ' ')}
           </span>
         </div>
 
         <nav className="flex-1 px-3 py-4 space-y-1 overflow-y-auto">
-          {menuItems.map((item) => {
+          {menuItems.filter(item => item.show).map((item) => {
             const Icon = item.icon;
             const isActive = activeTab === item.id;
             return (
               <button
                 key={item.id}
-                disabled={item.locked}
                 onClick={() => {
-                  if (!item.locked) {
-                    setActiveTab(item.id);
-                    setMobileOpen(false);
-                  }
+                  setActiveTab(item.id);
+                  setMobileOpen(false);
                 }}
                 className={cn(
                   "w-full flex items-center justify-between px-3.5 py-2.5 rounded-xl text-xs font-bold transition-all text-left",
-                  item.locked 
-                    ? "opacity-40 text-slate-500 cursor-not-allowed hover:bg-transparent"
-                    : isActive 
-                      ? "bg-emerald-600 text-white shadow-lg shadow-emerald-950/40 translate-x-1" 
-                      : "text-slate-300 hover:bg-slate-800/80 hover:text-white"
+                  isActive 
+                    ? "bg-emerald-600 text-white shadow-lg shadow-emerald-950/40 translate-x-1" 
+                    : "text-slate-300 hover:bg-slate-800/80 hover:text-white"
                 )}
               >
                 <div className="flex items-center space-x-3">
                   <Icon className={cn("w-4 h-4 shrink-0", isActive ? "text-white" : "text-slate-400")} />
                   <span>{item.label}</span>
                 </div>
-                {item.locked && <Lock className="w-3.5 h-3.5 text-slate-500 shrink-0" />}
               </button>
             );
           })}
         </nav>
 
         <div className="p-4 border-t border-slate-800 text-[10px] text-slate-500 text-center font-medium">
-          Cluster Beryl Maja • Versi 2.6
+          Cluster Beryl Maja • Transparansi Terbuka
         </div>
       </aside>
     </>

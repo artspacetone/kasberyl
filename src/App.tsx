@@ -1,25 +1,29 @@
 // src/App.tsx
-import React, { useState, useEffect } from 'react';
+import React, { useState } from 'react';
 import { Sidebar } from './components/Sidebar';
+import { BottomMobileNav } from './components/BottomMobileNav';
+import { PWAInstallPrompt } from './components/PWAInstallPrompt';
 import { 
   Dashboard, 
   DataWarga, 
   InfaqBulananPage, 
-  DanaAcaraPage,
+  DanaAcaraPage, 
   InfaqMajelisPage, 
-  PengeluaranPage,
+  PengeluaranPage, 
   PinjamanWargaPage, 
-  LaporanBalance,
-  AdArt,
+  LaporanBalance, 
+  AdArt, 
   DataImport, 
-  Login 
+  Login,
+  Keamanan,
+  Organisasi,
+  PenggunaPage
 } from './pages';
-import { Pengguna, canAccessFinance } from './types';
-import { Menu, LogOut, Wifi, WifiOff, Eye, ShieldCheck, Lock } from 'lucide-react';
+import { Pengguna } from './types';
+import { Menu, LogOut, Wifi, WifiOff, Eye, Lock } from 'lucide-react';
 import { isSupabaseConfigured } from './supabase';
 
 export default function App() {
-  // Sesi Login Persisten
   const [currentUser, setCurrentUser] = useState<Pengguna | null>(() => {
     const saved = localStorage.getItem('beryl_auth_session');
     if (saved) {
@@ -51,10 +55,10 @@ export default function App() {
   }
 
   const isGuestOrWarga = currentUser.peran === 'Warga' || currentUser.id_pengguna === 0;
-  const financeAllowed = canAccessFinance(currentUser);
+  const isSuperAdmin = currentUser.peran === 'Super_Admin';
 
   return (
-    <div className="min-h-screen bg-slate-50 flex">
+    <div className="min-h-screen bg-slate-50 flex flex-col lg:flex-row pb-16 lg:pb-0">
       <Sidebar
         activeTab={activeTab}
         setActiveTab={setActiveTab}
@@ -64,7 +68,7 @@ export default function App() {
       />
 
       <div className="flex-1 flex flex-col min-w-0">
-        <header className="h-16 bg-white border-b border-slate-200 px-4 md:px-8 flex items-center justify-between sticky top-0 z-30 shadow-2xs">
+        <header className="h-16 bg-white border-b border-slate-200 px-4 md:px-8 flex items-center justify-between sticky top-0 z-30 shadow-xs">
           <div className="flex items-center space-x-3">
             <button 
               onClick={() => setMobileOpen(true)}
@@ -73,26 +77,29 @@ export default function App() {
             >
               <Menu className="w-5 h-5" />
             </button>
-            <h1 className="text-xs md:text-sm font-black text-slate-800 tracking-tight">
-              Warga Beryl & Majelis Al Barokah
-            </h1>
+            <div>
+              <h1 className="text-xs md:text-sm font-black text-slate-800 tracking-tight">
+                Warga Beryl & Majelis Al Barokah
+              </h1>
+              <p className="text-[10px] text-slate-400 hidden sm:block">Cluster Beryl • Permata Mutiara Maja</p>
+            </div>
           </div>
 
           <div className="flex items-center space-x-3">
             {isGuestOrWarga ? (
-              <span className="inline-flex items-center space-x-1 px-3 py-1 rounded-full bg-amber-50 text-amber-800 border border-amber-200 text-[10px] font-bold">
-                <Eye className="w-3 h-3 text-amber-600" />
-                <span>Mode Warga (Akses Terkunci)</span>
+              <span className="inline-flex items-center space-x-1 px-3 py-1 rounded-full bg-emerald-50 text-emerald-800 border border-emerald-200 text-[10px] font-bold">
+                <Eye className="w-3 h-3 text-emerald-600" />
+                <span>Mode Warga (Transparansi Terbuka)</span>
               </span>
             ) : isSupabaseConfigured ? (
               <span className="hidden sm:inline-flex items-center space-x-1 px-2.5 py-1 rounded-full bg-emerald-50 text-emerald-700 border border-emerald-200 text-[10px] font-bold">
                 <Wifi className="w-3 h-3 text-emerald-600" />
-                <span>Cloud Online (Multi-Device)</span>
+                <span>Supabase Online</span>
               </span>
             ) : (
               <span className="hidden sm:inline-flex items-center space-x-1 px-2.5 py-1 rounded-full bg-amber-50 text-amber-800 border border-amber-200 text-[10px] font-bold">
                 <WifiOff className="w-3 h-3 text-amber-600" />
-                <span>Offline Lokal PC</span>
+                <span>Lokal Offline</span>
               </span>
             )}
 
@@ -109,39 +116,53 @@ export default function App() {
           </div>
         </header>
 
-        {/* Warning Banner jika Warga membuka tab yang tidak memiliki izin */}
-        {!isSupabaseConfigured && !isGuestOrWarga && (
-          <div className="bg-amber-500 text-white text-xs px-4 py-2 text-center font-bold">
-            ⚠️ Perhatian Pengurus: Kredensial Supabase Cloud belum dipasang di Netlify. Data baru tersimpan di browser PC ini saja. Pasang VITE_SUPABASE_URL di Netlify agar HP dapat membaca data.
+        {/* Notifikasi Status Mode Warga (Transparan & Aman) */}
+        {isGuestOrWarga && (
+          <div className="bg-emerald-50 border-b border-emerald-200 text-emerald-900 text-[11px] px-4 py-2 text-center font-medium">
+            👋 <strong>Selamat Datang di Portal Warga Beryl:</strong> Seluruh modul keuangan kas, donasi acara, infaq majelis, dan data warga terbuka secara transparan dalam mode <em>Lihat Saja (View-Only)</em>.
           </div>
         )}
 
+        {/* Konten Halaman: Seluruh Modul Terbuka untuk Mode Warga */}
         <main className="flex-1 p-4 md:p-8 max-w-7xl w-full mx-auto">
           {activeTab === 'dashboard' && <Dashboard />}
           {activeTab === 'warga' && <DataWarga user={currentUser} />}
-          {activeTab === 'infaq_bulanan' && (financeAllowed ? <InfaqBulananPage currentUser={currentUser} /> : <LockedView />)}
-          {activeTab === 'dana_acara' && (financeAllowed ? <DanaAcaraPage currentUser={currentUser} /> : <LockedView />)}
-          {activeTab === 'infaq_majelis' && (financeAllowed ? <InfaqMajelisPage currentUser={currentUser} /> : <LockedView />)}
-          {activeTab === 'pengeluaran' && (financeAllowed ? <PengeluaranPage currentUser={currentUser} /> : <LockedView />)}
-          {activeTab === 'pinjaman' && (financeAllowed ? <PinjamanWargaPage currentUser={currentUser} /> : <LockedView />)}
-          {activeTab === 'laporan' && (financeAllowed ? <LaporanBalance /> : <LockedView />)}
+          {activeTab === 'infaq_bulanan' && <InfaqBulananPage currentUser={currentUser} />}
+          {activeTab === 'dana_acara' && <DanaAcaraPage currentUser={currentUser} />}
+          {activeTab === 'infaq_majelis' && <InfaqMajelisPage currentUser={currentUser} />}
+          {activeTab === 'pengeluaran' && <PengeluaranPage currentUser={currentUser} />}
+          {activeTab === 'pinjaman' && <PinjamanWargaPage currentUser={currentUser} />}
+          {activeTab === 'laporan' && <LaporanBalance />}
+          {activeTab === 'keamanan' && <Keamanan user={currentUser} />}
+          {activeTab === 'organisasi' && <Organisasi user={currentUser} />}
+          {activeTab === 'pengguna' && (
+            isSuperAdmin ? (
+              <PenggunaPage currentUser={currentUser} />
+            ) : (
+              <div className="bg-white rounded-3xl border border-slate-200 p-10 text-center max-w-md mx-auto space-y-3 shadow-xs my-8">
+                <div className="w-12 h-12 bg-purple-100 text-purple-600 rounded-2xl flex items-center justify-center mx-auto">
+                  <Lock className="w-6 h-6" />
+                </div>
+                <h3 className="font-bold text-base text-slate-800">Manajemen Akun Khusus Super Admin</h3>
+                <p className="text-xs text-slate-500 leading-relaxed">
+                  Pengaturan kata sandi dan hak akses akun pengurus hanya dapat dikelola oleh Super Admin.
+                </p>
+              </div>
+            )
+          )}
           {activeTab === 'adart' && <AdArt />}
-          {activeTab === 'import' && (financeAllowed ? <DataImport user={currentUser} onImportSuccess={() => setActiveTab('dashboard')} /> : <LockedView />)}
+          {activeTab === 'import' && <DataImport user={currentUser} onImportSuccess={() => setActiveTab('dashboard')} />}
         </main>
       </div>
+
+      <BottomMobileNav
+        activeTab={activeTab}
+        setActiveTab={setActiveTab}
+        onOpenMenu={() => setMobileOpen(true)}
+        currentUser={currentUser}
+      />
+
+      <PWAInstallPrompt />
     </div>
   );
 }
-
-// Komponen Fallback untuk Halaman Terkunci
-const LockedView: React.FC = () => (
-  <div className="bg-white rounded-3xl border border-slate-200 p-12 text-center max-w-md mx-auto space-y-3 shadow-xs my-8">
-    <div className="w-12 h-12 bg-rose-100 text-rose-600 rounded-2xl flex items-center justify-center mx-auto">
-      <Lock className="w-6 h-6" />
-    </div>
-    <h3 className="font-bold text-base text-slate-800">Akses Modul Keuangan Dikunci</h3>
-    <p className="text-xs text-slate-500 leading-relaxed">
-      Halaman ini khusus untuk Pengurus Paguyuban / Bendahara terverifikasi. Akun Warga atau Tamu tidak diizinkan membuka catatan transaksi keuangan.
-    </p>
-  </div>
-);
