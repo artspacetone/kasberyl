@@ -32,3 +32,5 @@ Jika Anda ingin menguji tampilan sebagai Warga Biasa:
 💡 Rekomendasi:
 Untuk mengelola data warga, melihat nomor asli, dan membuka proteksi, login
 menggunakan Username: admin dan Password: AdminBeryl2026!.
+
+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

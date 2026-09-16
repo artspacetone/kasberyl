@@ -31,9 +31,11 @@ self.addEventListener('activate', (event) => {
 });
 
 self.addEventListener('fetch', (event) => {
-  if (event.request.method !== 'GET') return;
+  // JANGAN PERNAH intercept request API Supabase atau Web3
+  if (event.request.url.includes('supabase.co') || event.request.method !== 'GET') {
+    return;
+  }
   
-  // Cache First untuk assets statis, Network first untuk API
   if (event.request.url.includes('/assets/') || event.request.url.includes('fonts.')) {
     event.respondWith(
       caches.match(event.request).then((cachedResponse) => {

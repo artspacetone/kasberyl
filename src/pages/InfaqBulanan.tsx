@@ -11,8 +11,11 @@ import { WargaSearchSelect } from '../components/WargaSearchSelect';
 import { exportMatriksKasToExcel } from '../utils/exportManager';
 import { KuitansiModal, KuitansiData } from '../components/KuitansiModal';
 import { ImageViewerModal } from '../components/ImageViewerModal';
-import { parseRawKasTextToRecords, forceInjectKasData, emitSafeDataUpdated } from '../utils/permanentKasData';
-import { saveYearKasCache, getYearKasCache } from '../utils/storageEngine';
+import { 
+  parseRawKasTextToRecords, 
+  forceInjectKasData, 
+  emitSafeDataUpdated 
+} from '../utils/permanentKasData';
 
 const cleanKey = (str: any): string => {
   if (!str) return '';
@@ -31,11 +34,12 @@ export const InfaqBulananPage: React.FC<{ currentUser?: Pengguna }> = ({ current
   // Modal Input Paksa
   const [showForceModal, setShowForceModal] = useState(false);
   const [rawTextInput, setRawTextInput] = useState('');
+  const [isInjecting, setIsInjecting] = useState(false);
 
-  // Lock Anti-Race Condition
+  // Flag lock anti-reload loop
   const isSelfUpdatingRef = useRef(false);
 
-  // Paginasi Cerdas (Mencegah Lag pada Ribuan Baris)
+  // Paginasi Cerdas O(1)
   const [pageMatriks, setPageMatriks] = useState(1);
   const [rowsPerMatriks, setRowsPerMatriks] = useState(50);
   const [pageTrx, setPageTrx] = useState(1);
@@ -79,14 +83,14 @@ export const InfaqBulananPage: React.FC<{ currentUser?: Pengguna }> = ({ current
     setTimeout(() => setToastMessage(null), 2500);
   }, []);
 
-  // Matching Cerdas Multi-Kriteria
+  // Matching Cerdas Berdasarkan Rumah & Nama
   const isMatchWarga = useCallback((k: KasWargaBeryl, w: Warga): boolean => {
-    if (k.id_warga && w.id_warga && String(k.id_warga) === String(w.id_warga)) {
-      return true;
-    }
     const rK = cleanKey(k.id_rumah);
     const rW = cleanKey(w.id_rumah);
     if (rK && rW && rK === rW) {
+      return true;
+    }
+    if (k.id_warga && w.id_warga && String(k.id_warga) === String(w.id_warga)) {
       return true;
     }
     const nK = cleanKey(k.nama_warga);
@@ -119,79 +123,71 @@ export const InfaqBulananPage: React.FC<{ currentUser?: Pengguna }> = ({ current
   }, []);
 
   // =========================================================================
-  // LOAD DATA SKALA BESAR (KUERI TERFILTER PER TAHUN AKTIF)
-  // Tidak pernah membebani RAM meskipun ada 50.000 transaksi di database
+  // LOAD DATA DENGAN LIMIT 5.000 (MENGAMBIL SELURUH 1.028 DATA CLOUD KE HP & LAPTOP)
   // =========================================================================
   const loadData = useCallback(async () => {
     setLoading(true);
     let loadedWarga: Warga[] = [];
     let loadedKas: KasWargaBeryl[] = [];
 
-    // 1. Ambil dari Partisi Cache Tahun Aktif
+    // 1. Ambil dari Memori Lokal Terlebih Dahulu
     const localW = localStorage.getItem('local_warga');
     if (localW) {
       try { loadedWarga = JSON.parse(localW); } catch (e) {}
     }
 
-    loadedKas = getYearKasCache(selectedYear);
+    const localK = localStorage.getItem('local_kas');
+    if (localK) {
+      try { loadedKas = JSON.parse(localK); } catch (e) {}
+    }
 
-    // 2. Kueri Tersaring dari Supabase (Hanya Tahun yang Dipilih)
+    // 2. Ambil dari Supabase Cloud (Limit 5000 agar tidak terpotong 1000)
     if (isSupabaseConfigured) {
       try {
-        const resWarga = await supabase.from('warga').select('*').order('id_rumah', { ascending: true });
+        const resWarga = await supabase.from('warga').select('*').order('id_rumah', { ascending: true }).limit(2000);
         if (resWarga.data && resWarga.data.length > 0) {
           loadedWarga = resWarga.data;
           localStorage.setItem('local_warga', JSON.stringify(loadedWarga));
         }
 
-        // Server-Side Range Query untuk Tahun Buku yang Dipilih
-        const startDate = `${selectedYear}-01-01`;
-        const endDate = `${selectedYear}-12-31`;
-
-        let resKas = await supabase
-          .from('kas_warga')
-          .select('*')
-          .gte('periode_bulan', startDate)
-          .lte('periode_bulan', endDate)
-          .order('tanggal', { ascending: false });
+        const resKas = await supabase.from('kas_warga').select('*').order('tanggal', { ascending: false }).limit(5000);
 
         if (!resKas.error && resKas.data && resKas.data.length > 0) {
-          const kasMap = new Map<string, KasWargaBeryl>();
-          
-          // Masukkan data lokal tahun ini
-          loadedKas.forEach(k => {
-            const key = `${k.id_warga || cleanKey(k.nama_warga)}_${cleanKey(k.id_rumah)}_${k.periode_bulan || k.tanggal}`;
-            kasMap.set(key, k);
-          });
-
-          // Gabungkan data cloud
-          resKas.data.forEach((k: any) => {
-            const key = `${k.id_warga || cleanKey(k.nama_warga)}_${cleanKey(k.id_rumah)}_${k.periode_bulan || k.tanggal}`;
-            kasMap.set(key, { ...kasMap.get(key), ...k });
-          });
-
-          loadedKas = Array.from(kasMap.values());
-          saveYearKasCache(selectedYear, loadedKas);
+          // Cloud memiliki data: Utamakan Cloud agar HP & Laptop Sinkron 100%!
+          loadedKas = resKas.data.map((d: any) => ({
+            id_transaksi: d.id_transaksi,
+            id_warga: d.id_warga || 0,
+            nama_warga: d.nama_warga || 'Warga Beryl',
+            id_rumah: d.id_rumah || '-',
+            periode_bulan: d.periode_bulan,
+            tanggal: d.tanggal,
+            nominal: Number(d.nominal || 10000),
+            peruntukan: d.peruntukan || 'Operasional dan Sosial',
+            status_bayar: d.status_bayar || 'Lunas',
+            keterangan: d.keterangan || 'Iuran Kas Warga',
+            bukti_transfer: d.bukti_transfer || '',
+            diinput_oleh: d.diinput_oleh || 1
+          }));
+          localStorage.setItem('local_kas', JSON.stringify(loadedKas));
         }
       } catch (err: any) {
-        console.warn('Pemberitahuan: Menggunakan partisi data lokal:', err.message);
+        console.warn('Menggunakan data kas lokal:', err.message);
       }
     }
 
     setWargaList(loadedWarga);
     setKasList(loadedKas);
     setLoading(false);
-  }, [selectedYear]);
+  }, []);
 
-  // SINKRONISASI SUPABASE REALTIME (INSTAN MULTI-DEVICE)
+  // REALTIME WEBSOCKET SUPABASE (HP & LAPTOP SINKRON DETIK ITU JUGA)
   useEffect(() => {
     loadData();
 
-    // Langganan Realtime Supabase
     let channel: any = null;
     if (isSupabaseConfigured) {
       channel = supabase
-        .channel('realtime_kas_warga')
+        .channel('public:kas_warga')
         .on('postgres_changes', { event: '*', schema: 'public', table: 'kas_warga' }, () => {
           if (!isSelfUpdatingRef.current) {
             loadData();
@@ -241,11 +237,11 @@ export const InfaqBulananPage: React.FC<{ currentUser?: Pengguna }> = ({ current
       }
       if (!monthNum) continue;
 
-      if (k.id_warga) {
-        map.set(`id_${k.id_warga}_${monthNum}`, k);
-      }
       if (k.id_rumah) {
         map.set(`rumah_${cleanKey(k.id_rumah)}_${monthNum}`, k);
+      }
+      if (k.id_warga) {
+        map.set(`id_${k.id_warga}_${monthNum}`, k);
       }
       if (k.nama_warga) {
         map.set(`nama_${cleanKey(k.nama_warga)}_${monthNum}`, k);
@@ -256,19 +252,19 @@ export const InfaqBulananPage: React.FC<{ currentUser?: Pengguna }> = ({ current
 
   const getKasItem = useCallback((w: Warga, bulan: number): KasWargaBeryl | undefined => {
     return (
-      (w.id_warga ? kasMatrixMap.get(`id_${w.id_warga}_${bulan}`) : undefined) ||
       (w.id_rumah ? kasMatrixMap.get(`rumah_${cleanKey(w.id_rumah)}_${bulan}`) : undefined) ||
+      (w.id_warga ? kasMatrixMap.get(`id_${w.id_warga}_${bulan}`) : undefined) ||
       (w.nama_lengkap ? kasMatrixMap.get(`nama_${cleanKey(w.nama_lengkap)}_${bulan}`) : undefined)
     );
   }, [kasMatrixMap]);
 
   // =========================================================================
-  // KLIK 1X MASUK DANA, KLIK 2X BATAL (ATOMIC UPSERT ANTI-RACE CONDITION)
+  // KLIK 1X MASUK DANA, KLIK 2X BATAL (HAPUS BERDASARKAN RUMAH & BULAN PRESISI)
   // =========================================================================
   const handleCellClick = async (w: Warga, bulan: number) => {
     const found = getKasItem(w, bulan);
 
-    // KASUS 1: BATALKAN PEMBAYARAN
+    // KASUS 1: BATALKAN PEMBAYARAN (HANYA HAPUS RUMAH INI DI BULAN INI)
     if (found) {
       if (!canEdit) {
         bukaKuitansi(w, found, bulan);
@@ -280,17 +276,23 @@ export const InfaqBulananPage: React.FC<{ currentUser?: Pengguna }> = ({ current
       );
       if (!konfirmasi) return;
 
-      if (isSupabaseConfigured && found.id_transaksi) {
+      const monthCode = String(bulan).padStart(2, '0');
+      const targetPeriode = `${selectedYear}-${monthCode}-01`;
+
+      // Hapus di cloud berdasarkan unit rumah dan bulan yang pasti
+      if (isSupabaseConfigured) {
         try {
-          await supabase.from('kas_warga').delete().eq('id_transaksi', found.id_transaksi);
+          await supabase.from('kas_warga').delete().match({
+            id_rumah: w.id_rumah,
+            periode_bulan: targetPeriode
+          });
         } catch (e) {}
       }
 
-      // Hapus TEPAT 1 transaksi dengan splice index (100% aman)
+      // Hapus hanya tepat 1 baris di memori lokal
       const targetIndex = kasList.findIndex(k => 
-        k === found || 
-        (found.id_transaksi && k.id_transaksi === found.id_transaksi) ||
-        (isMatchWarga(k, w) && isMatchMonth(k, selectedYear, bulan))
+        (cleanKey(k.id_rumah) === cleanKey(w.id_rumah) && isMatchMonth(k, selectedYear, bulan)) ||
+        (found.id_transaksi && k.id_transaksi === found.id_transaksi)
       );
 
       if (targetIndex !== -1) {
@@ -299,14 +301,14 @@ export const InfaqBulananPage: React.FC<{ currentUser?: Pengguna }> = ({ current
 
         isSelfUpdatingRef.current = true;
         setKasList(updated);
-        saveYearKasCache(selectedYear, updated);
+        localStorage.setItem('local_kas', JSON.stringify(updated));
         emitSafeDataUpdated();
         showToast(`❌ Pembayaran ${NAMA_BULAN[bulan - 1]} ${w.id_rumah} dibatalkan`, 'cancel');
       }
       return;
     }
 
-    // KASUS 2: MASUK DANA (UPSERT ATOMIK)
+    // KASUS 2: MASUK DANA (BAYAR LUNAS DENGAN UPSERT ANTI-409)
     if (!canEdit) return;
 
     const monthCode = String(bulan).padStart(2, '0');
@@ -332,7 +334,8 @@ export const InfaqBulananPage: React.FC<{ currentUser?: Pengguna }> = ({ current
     if (isSupabaseConfigured) {
       try {
         await supabase.from('kas_warga').upsert([{
-          id_warga: w.id_warga,
+          id_rumah: w.id_rumah,
+          nama_warga: w.nama_lengkap,
           periode_bulan: periodeBulan,
           tanggal: tanggalBayar,
           nominal: 10000,
@@ -342,8 +345,8 @@ export const InfaqBulananPage: React.FC<{ currentUser?: Pengguna }> = ({ current
           bukti_transfer: '',
           diinput_oleh: currentUser?.id_pengguna || 1
         }], {
-          onConflict: 'id_warga,periode_bulan',
-          ignoreDuplicates: true
+          onConflict: 'id_rumah,periode_bulan',
+          ignoreDuplicates: false
         });
       } catch (e) {}
     }
@@ -352,30 +355,39 @@ export const InfaqBulananPage: React.FC<{ currentUser?: Pengguna }> = ({ current
 
     isSelfUpdatingRef.current = true;
     setKasList(updated);
-    saveYearKasCache(selectedYear, updated);
+    localStorage.setItem('local_kas', JSON.stringify(updated));
     emitSafeDataUpdated();
 
     showToast(`✓ Iuran ${NAMA_BULAN[bulan - 1]} ${w.id_rumah} LUNAS (+Rp 10.000)`, 'success');
   };
 
-  // Kunci Paksa Masuk 1.028 Transaksi
+  // =========================================================================
+  // PAKSA MASUKKAN 1.028 TRANSAKSI KE CLOUD SUPABASE & LOKAL
+  // =========================================================================
   const handleForceInject = async () => {
     if (!rawTextInput.trim()) {
       alert('Silakan tempel teks catatan transaksi dari file new 3.txt terlebih dahulu!');
       return;
     }
 
+    setIsInjecting(true);
     const parsed = parseRawKasTextToRecords(rawTextInput);
     if (parsed.length === 0) {
       alert('Format teks tidak terdeteksi. Pastikan format sesuai file new 3.txt!');
+      setIsInjecting(false);
       return;
     }
 
-    await forceInjectKasData(parsed);
-    saveYearKasCache(selectedYear, parsed);
+    const ok = await forceInjectKasData(parsed);
     setKasList(parsed);
+    setIsInjecting(false);
     setShowForceModal(false);
-    showToast(`⚡ Sukses! ${parsed.length} Transaksi Kas Berhasil Dikunci Permanen!`, 'success');
+
+    if (ok) {
+      showToast(`⚡ Sukses! ${parsed.length} Data Kas Berhasil Masuk Cloud & Lokal!`, 'success');
+    } else {
+      showToast(`⚠️ Tersimpan di Lokal, Periksa Koneksi Cloud Supabase`, 'cancel');
+    }
   };
 
   const bukaKuitansi = (w: Warga, k: KasWargaBeryl, bulan: number) => {
@@ -420,10 +432,11 @@ export const InfaqBulananPage: React.FC<{ currentUser?: Pengguna }> = ({ current
       bukti_transfer: formManual.bukti_transfer.trim(),
     };
 
-    if (isSupabaseConfigured) {
+    if (isSupabaseConfigured && wargaObj) {
       try {
         await supabase.from('kas_warga').upsert([{
-          id_warga: Number(formManual.id_warga),
+          id_rumah: wargaObj.id_rumah,
+          nama_warga: wargaObj.nama_lengkap,
           periode_bulan: periodeBulan,
           tanggal: formManual.tanggal,
           nominal: Number(formManual.nominal),
@@ -433,8 +446,8 @@ export const InfaqBulananPage: React.FC<{ currentUser?: Pengguna }> = ({ current
           bukti_transfer: formManual.bukti_transfer.trim(),
           diinput_oleh: currentUser?.id_pengguna || 1
         }], {
-          onConflict: 'id_warga,periode_bulan',
-          ignoreDuplicates: true
+          onConflict: 'id_rumah,periode_bulan',
+          ignoreDuplicates: false
         });
       } catch (e) {}
     }
@@ -443,7 +456,7 @@ export const InfaqBulananPage: React.FC<{ currentUser?: Pengguna }> = ({ current
 
     isSelfUpdatingRef.current = true;
     setKasList(updated);
-    saveYearKasCache(selectedYear, updated);
+    localStorage.setItem('local_kas', JSON.stringify(updated));
     emitSafeDataUpdated();
     setShowManualModal(false);
 
@@ -502,7 +515,7 @@ export const InfaqBulananPage: React.FC<{ currentUser?: Pengguna }> = ({ current
         await supabase
           .from('kas_warga')
           .update(updatePayload)
-          .eq('id_transaksi', editingKas.id_transaksi);
+          .match({ id_rumah: editingKas.id_rumah, periode_bulan: editingKas.periode_bulan });
       } catch (err: any) {}
     }
 
@@ -514,7 +527,7 @@ export const InfaqBulananPage: React.FC<{ currentUser?: Pengguna }> = ({ current
 
     isSelfUpdatingRef.current = true;
     setKasList(updated);
-    saveYearKasCache(selectedYear, updated);
+    localStorage.setItem('local_kas', JSON.stringify(updated));
     emitSafeDataUpdated();
 
     setShowEditModal(false);
@@ -524,11 +537,15 @@ export const InfaqBulananPage: React.FC<{ currentUser?: Pengguna }> = ({ current
 
   const handleDeleteKas = async (id: number) => {
     if (!canEdit) return;
+    const item = kasList.find(k => k.id_transaksi === id);
     if (!confirm('Hapus transaksi pembayaran kas ini? Status bulan tersebut akan kembali menjadi Belum Bayar.')) return;
 
-    if (isSupabaseConfigured) {
+    if (isSupabaseConfigured && item) {
       try {
-        await supabase.from('kas_warga').delete().eq('id_transaksi', id);
+        await supabase.from('kas_warga').delete().match({
+          id_rumah: item.id_rumah,
+          periode_bulan: item.periode_bulan
+        });
       } catch (err: any) {}
     }
 
@@ -536,12 +553,12 @@ export const InfaqBulananPage: React.FC<{ currentUser?: Pengguna }> = ({ current
 
     isSelfUpdatingRef.current = true;
     setKasList(updated);
-    saveYearKasCache(selectedYear, updated);
+    localStorage.setItem('local_kas', JSON.stringify(updated));
     emitSafeDataUpdated();
     showToast('❌ Transaksi kas berhasil dihapus', 'cancel');
   };
 
-  // Memoized Filters & Paginasi
+  // Memoized Filtering
   const filteredWarga = useMemo(() => {
     const q = search.toLowerCase().trim();
     if (!q) return wargaList;
@@ -601,7 +618,7 @@ export const InfaqBulananPage: React.FC<{ currentUser?: Pengguna }> = ({ current
             <h2 className="text-xl font-black text-slate-800 tracking-tight">Kas Iuran Warga Beryl (Rp 10.000 / Bln)</h2>
             <span className="px-2.5 py-0.5 rounded-full text-[10px] font-bold bg-emerald-100 text-emerald-800 flex items-center space-x-1">
               <Radio className="w-3 h-3 text-emerald-600 animate-pulse" />
-              <span>Realtime Sync • Terproteksi</span>
+              <span>Realtime Cloud HP & Laptop</span>
             </span>
           </div>
           <p className="text-xs text-slate-500 mt-0.5">
@@ -609,13 +626,14 @@ export const InfaqBulananPage: React.FC<{ currentUser?: Pengguna }> = ({ current
           </p>
         </div>
         <div className="flex flex-wrap items-center gap-2">
+          {/* TOMBOL PAKSA MASUK KE CLOUD & LOKAL */}
           <button
             onClick={() => setShowForceModal(true)}
             className="flex items-center space-x-1.5 px-3 py-2 bg-gradient-to-r from-amber-600 to-rose-600 hover:from-amber-700 hover:to-rose-700 text-white rounded-xl text-xs font-black shadow-sm transition-all"
-            title="Paksa Kunci 1.028 Transaksi"
+            title="Kunci & Masukkan 1.028 Transaksi ke Cloud"
           >
             <Zap className="w-3.5 h-3.5" />
-            <span>⚡ Paksa Kunci 1.028 Data Kas</span>
+            <span>⚡ Paksa Kunci 1.028 Data Kas ke Cloud</span>
           </button>
 
           <button
@@ -681,7 +699,7 @@ export const InfaqBulananPage: React.FC<{ currentUser?: Pengguna }> = ({ current
         </div>
       </div>
 
-      {/* TAMPILAN 1: MATRIKS 12 BULAN RINGAN */}
+      {/* TAMPILAN 1: MATRIKS 12 BULAN DENGAN MATCHING UNIT RUMAH (ANTI-GAGAL) */}
       {activeTab === 'matriks' && (
         <div className="bg-white rounded-2xl border border-slate-200 shadow-xs overflow-hidden">
           <div className="overflow-x-auto">
@@ -911,20 +929,20 @@ export const InfaqBulananPage: React.FC<{ currentUser?: Pengguna }> = ({ current
         </div>
       )}
 
-      {/* MODAL PAKSA MASUK 1.028 TRANSAKSI */}
+      {/* MODAL PAKSA MASUK KE CLOUD & LOKAL */}
       {showForceModal && (
         <div className="fixed inset-0 bg-slate-900/60 flex items-center justify-center p-4 z-50 backdrop-blur-xs">
           <div className="bg-white rounded-3xl shadow-2xl w-full max-w-lg p-6 space-y-4 max-h-[90vh] overflow-y-auto">
             <div className="flex justify-between items-center border-b pb-3">
               <div className="flex items-center space-x-2">
                 <Database className="w-5 h-5 text-amber-600" />
-                <h3 className="font-black text-slate-900 text-sm">Paksa Kunci 1.028 Transaksi Kas</h3>
+                <h3 className="font-black text-slate-900 text-sm">Paksa Kunci 1.028 Data Kas ke Cloud & HP</h3>
               </div>
               <button onClick={() => setShowForceModal(false)}><X className="w-4 h-4" /></button>
             </div>
 
             <p className="text-xs text-slate-600 leading-relaxed">
-              Buka file <strong>new 3.txt</strong>, salin seluruh isinya (Ctrl+A lalu Ctrl+C), kemudian tempelkan di kotak bawah ini. Sistem akan langsung mengunci seluruh 1.028 transaksi ke dalam aplikasi menggunakan <em>Anti-409 Upsert</em>!
+              Buka file <strong>new 3.txt</strong>, salin seluruh isinya (Ctrl+A lalu Ctrl+C), kemudian tempelkan di kotak bawah ini. Sistem akan langsung mengunggah dan mengunci seluruh 1.028 transaksi ke database Supabase sehingga <strong>di HP dan Laptop langsung muncul bersamaan detik ini juga!</strong>
             </p>
 
             <textarea
@@ -936,15 +954,16 @@ export const InfaqBulananPage: React.FC<{ currentUser?: Pengguna }> = ({ current
             />
 
             <div className="flex justify-between items-center pt-3 border-t">
-              <span className="text-[10px] text-slate-400 font-bold">Total Terdeteksi: {rawTextInput.split('Unit:').length - 1} baris</span>
+              <span className="text-[10px] text-slate-400 font-bold">Terdeteksi: {rawTextInput.split('Unit:').length - 1} baris</span>
               <div className="flex space-x-2">
                 <button type="button" onClick={() => setShowForceModal(false)} className="px-4 py-2 border rounded-xl font-bold text-xs">Batal</button>
                 <button 
                   type="button" 
+                  disabled={isInjecting}
                   onClick={handleForceInject} 
-                  className="px-5 py-2 bg-gradient-to-r from-amber-600 to-rose-600 text-white rounded-xl font-bold text-xs shadow-md"
+                  className="px-5 py-2 bg-gradient-to-r from-amber-600 to-rose-600 text-white rounded-xl font-bold text-xs shadow-md disabled:opacity-50"
                 >
-                  ⚡ Masukkan Paksa Sekarang
+                  {isInjecting ? 'Mengunggah ke Cloud...' : '⚡ Masukkan ke Cloud Sekarang'}
                 </button>
               </div>
             </div>

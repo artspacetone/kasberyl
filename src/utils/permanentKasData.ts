@@ -2,16 +2,15 @@
 import { KasWargaBeryl } from '../types';
 import { supabase, isSupabaseConfigured } from '../supabase';
 
-// Debounce Event Emitter untuk mencegah memory leak warning di ekstensi browser
 let debounceTimer: any = null;
 export const emitSafeDataUpdated = () => {
   if (debounceTimer) clearTimeout(debounceTimer);
   debounceTimer = setTimeout(() => {
     window.dispatchEvent(new Event('app_data_updated'));
-  }, 100);
+  }, 120);
 };
 
-// Parser Cerdas Format new 3.txt (Presisi 100%)
+// Parser Cerdas Format new 3.txt
 export const parseRawKasTextToRecords = (rawText: string): KasWargaBeryl[] => {
   const lines = rawText.split('\n');
   const records: KasWargaBeryl[] = [];
@@ -81,17 +80,18 @@ export const parseRawKasTextToRecords = (rawText: string): KasWargaBeryl[] => {
   return records;
 };
 
-// Fungsi Memaksa Memasukkan 1.028 Transaksi Menggunakan UPSERT (Bebas Error 409)
-export const forceInjectKasData = async (dataList: KasWargaBeryl[]): Promise<void> => {
-  // 1. Kunci di Memori Lokal Seketika
+// Fungsi Memaksa Memasukkan 1.028 Transaksi ke Supabase Cloud (Anti-409)
+export const forceInjectKasData = async (dataList: KasWargaBeryl[]): Promise<boolean> => {
+  // 1. Simpan di Lokal Seketika
   localStorage.setItem('local_kas', JSON.stringify(dataList));
   emitSafeDataUpdated();
 
-  // 2. Kirim ke Supabase Cloud Menggunakan UPSERT (Bebas Konflik 409)
+  // 2. Kirim ke Supabase Cloud dengan onConflict 'id_rumah,periode_bulan'
   if (isSupabaseConfigured) {
     try {
       const dbPayload = dataList.map(k => ({
-        id_warga: k.id_warga,
+        id_rumah: k.id_rumah,
+        nama_warga: k.nama_warga,
         periode_bulan: k.periode_bulan,
         tanggal: k.tanggal,
         nominal: k.nominal,
@@ -102,16 +102,21 @@ export const forceInjectKasData = async (dataList: KasWargaBeryl[]): Promise<voi
         diinput_oleh: 1
       }));
 
-      // Kirim per batch 100 dengan opsi ignoreDuplicates agar tidak memicu 409
       for (let i = 0; i < dbPayload.length; i += 100) {
         const batch = dbPayload.slice(i, i + 100);
-        await supabase.from('kas_warga').upsert(batch, {
-          onConflict: 'id_warga,periode_bulan',
-          ignoreDuplicates: true
+        const { error } = await supabase.from('kas_warga').upsert(batch, {
+          onConflict: 'id_rumah,periode_bulan',
+          ignoreDuplicates: false
         });
+        if (error) {
+          console.error('Batch error:', error.message);
+        }
       }
+      return true;
     } catch (e: any) {
-      console.warn('Sync cloud diselesaikan:', e.message);
+      console.error('Sync cloud error:', e.message);
+      return false;
     }
   }
+  return true;
 };
