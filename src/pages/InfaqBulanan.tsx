@@ -4,8 +4,9 @@ import { supabase, isSupabaseConfigured } from '../supabase';
 import { Warga, KasWargaBeryl, formatRupiah, NAMA_BULAN, Pengguna } from '../types';
 import { 
   CheckCircle2, Search, Plus, X, FileSpreadsheet, 
-  Edit2, Trash2, Receipt, ExternalLink, RefreshCw,
-  ChevronLeft, ChevronRight, Zap, ShieldCheck, Database, Radio
+  Edit2, Trash2, Receipt, ExternalLink,
+  ChevronLeft, ChevronRight, Zap, ShieldCheck, Database, Radio,
+  ArrowUpDown, ArrowUp, ArrowDown, LayoutGrid, Table, Home, UserCheck
 } from 'lucide-react';
 import { WargaSearchSelect } from '../components/WargaSearchSelect';
 import { exportMatriksKasToExcel } from '../utils/exportManager';
@@ -26,12 +27,26 @@ export const InfaqBulananPage: React.FC<{ currentUser?: Pengguna }> = ({ current
   const [wargaList, setWargaList] = useState<Warga[]>([]);
   const [kasList, setKasList] = useState<KasWargaBeryl[]>([]);
   const [loading, setLoading] = useState(true);
+  
+  // Tampilan Utama: 'matriks' | 'transaksi'
   const [activeTab, setActiveTab] = useState<'matriks' | 'transaksi'>('matriks');
+  
+  // Mode Visual Matriks: 'table' (Tabel Klasik) vs 'cards' (Kartu HP Ramah Sentuhan)
+  const [matrixViewMode, setMatrixViewMode] = useState<'table' | 'cards'>('cards');
+  
+  // State Pencarian & Tahun
   const [search, setSearch] = useState('');
   const [selectedYear, setSelectedYear] = useState<number>(2026);
+  const [filterBlok, setFilterBlok] = useState<string>('Semua');
+
+  // State Sortir Matriks
+  const [sortField, setSortField] = useState<'id_rumah' | 'nama_lengkap' | 'total' | 'tunggakan'>('id_rumah');
+  const [sortDirection, setSortDirection] = useState<'asc' | 'desc'>('asc');
+
+  // Toast Notification
   const [toastMessage, setToastMessage] = useState<{ text: string; type: 'success' | 'cancel' } | null>(null);
 
-  // Modal Input Paksa
+  // Modal Input Paksa 1028
   const [showForceModal, setShowForceModal] = useState(false);
   const [rawTextInput, setRawTextInput] = useState('');
   const [isInjecting, setIsInjecting] = useState(false);
@@ -41,7 +56,7 @@ export const InfaqBulananPage: React.FC<{ currentUser?: Pengguna }> = ({ current
 
   // Paginasi Cerdas O(1)
   const [pageMatriks, setPageMatriks] = useState(1);
-  const [rowsPerMatriks, setRowsPerMatriks] = useState(50);
+  const [rowsPerMatriks, setRowsPerMatriks] = useState(40);
   const [pageTrx, setPageTrx] = useState(1);
   const [rowsPerTrx, setRowsPerTrx] = useState(50);
 
@@ -123,14 +138,13 @@ export const InfaqBulananPage: React.FC<{ currentUser?: Pengguna }> = ({ current
   }, []);
 
   // =========================================================================
-  // LOAD DATA DENGAN LIMIT 5.000 (MENGAMBIL SELURUH 1.028 DATA CLOUD KE HP & LAPTOP)
+  // LOAD DATA SUPABASE CLOUD & LOKAL
   // =========================================================================
   const loadData = useCallback(async () => {
     setLoading(true);
     let loadedWarga: Warga[] = [];
     let loadedKas: KasWargaBeryl[] = [];
 
-    // 1. Ambil dari Memori Lokal Terlebih Dahulu
     const localW = localStorage.getItem('local_warga');
     if (localW) {
       try { loadedWarga = JSON.parse(localW); } catch (e) {}
@@ -141,7 +155,6 @@ export const InfaqBulananPage: React.FC<{ currentUser?: Pengguna }> = ({ current
       try { loadedKas = JSON.parse(localK); } catch (e) {}
     }
 
-    // 2. Ambil dari Supabase Cloud (Limit 5000 agar tidak terpotong 1000)
     if (isSupabaseConfigured) {
       try {
         const resWarga = await supabase.from('warga').select('*').order('id_rumah', { ascending: true }).limit(2000);
@@ -153,7 +166,6 @@ export const InfaqBulananPage: React.FC<{ currentUser?: Pengguna }> = ({ current
         const resKas = await supabase.from('kas_warga').select('*').order('tanggal', { ascending: false }).limit(5000);
 
         if (!resKas.error && resKas.data && resKas.data.length > 0) {
-          // Cloud memiliki data: Utamakan Cloud agar HP & Laptop Sinkron 100%!
           loadedKas = resKas.data.map((d: any) => ({
             id_transaksi: d.id_transaksi,
             id_warga: d.id_warga || 0,
@@ -171,7 +183,7 @@ export const InfaqBulananPage: React.FC<{ currentUser?: Pengguna }> = ({ current
           localStorage.setItem('local_kas', JSON.stringify(loadedKas));
         }
       } catch (err: any) {
-        console.warn('Menggunakan data kas lokal:', err.message);
+        console.warn('Menggunakan data lokal:', err.message);
       }
     }
 
@@ -180,7 +192,7 @@ export const InfaqBulananPage: React.FC<{ currentUser?: Pengguna }> = ({ current
     setLoading(false);
   }, []);
 
-  // REALTIME WEBSOCKET SUPABASE (HP & LAPTOP SINKRON DETIK ITU JUGA)
+  // REALTIME WEBSOCKET
   useEffect(() => {
     loadData();
 
@@ -258,13 +270,43 @@ export const InfaqBulananPage: React.FC<{ currentUser?: Pengguna }> = ({ current
     );
   }, [kasMatrixMap]);
 
+  // Hitung Total Bayar Setahun per Warga untuk Sortir Cepat
+  const getCitizenAnnualTotal = useCallback((w: Warga): number => {
+    let tot = 0;
+    for (let m = 1; m <= 12; m++) {
+      const k = getKasItem(w, m);
+      if (k) tot += Number(k.nominal || 10000);
+    }
+    return tot;
+  }, [getKasItem]);
+
+  // Handler Sortir
+  const handleSort = (field: 'id_rumah' | 'nama_lengkap' | 'total' | 'tunggakan') => {
+    if (sortField === field) {
+      setSortDirection(prev => (prev === 'asc' ? 'desc' : 'asc'));
+    } else {
+      setSortField(field);
+      setSortDirection(field === 'total' || field === 'tunggakan' ? 'desc' : 'asc');
+    }
+    setPageMatriks(1);
+  };
+
+  const renderSortIcon = (field: typeof sortField) => {
+    if (sortField !== field) return <ArrowUpDown className="w-3 h-3 text-slate-400 inline ml-1 opacity-60" />;
+    return sortDirection === 'asc' ? (
+      <ArrowUp className="w-3.5 h-3.5 text-emerald-600 inline ml-1" />
+    ) : (
+      <ArrowDown className="w-3.5 h-3.5 text-emerald-600 inline ml-1" />
+    );
+  };
+
   // =========================================================================
-  // KLIK 1X MASUK DANA, KLIK 2X BATAL (HAPUS BERDASARKAN RUMAH & BULAN PRESISI)
+  // KLIK 1X MASUK DANA, KLIK 2X BATALKAN (TARGETED & AMAN)
   // =========================================================================
   const handleCellClick = async (w: Warga, bulan: number) => {
     const found = getKasItem(w, bulan);
 
-    // KASUS 1: BATALKAN PEMBAYARAN (HANYA HAPUS RUMAH INI DI BULAN INI)
+    // BATALKAN PEMBAYARAN
     if (found) {
       if (!canEdit) {
         bukaKuitansi(w, found, bulan);
@@ -279,7 +321,6 @@ export const InfaqBulananPage: React.FC<{ currentUser?: Pengguna }> = ({ current
       const monthCode = String(bulan).padStart(2, '0');
       const targetPeriode = `${selectedYear}-${monthCode}-01`;
 
-      // Hapus di cloud berdasarkan unit rumah dan bulan yang pasti
       if (isSupabaseConfigured) {
         try {
           await supabase.from('kas_warga').delete().match({
@@ -289,7 +330,6 @@ export const InfaqBulananPage: React.FC<{ currentUser?: Pengguna }> = ({ current
         } catch (e) {}
       }
 
-      // Hapus hanya tepat 1 baris di memori lokal
       const targetIndex = kasList.findIndex(k => 
         (cleanKey(k.id_rumah) === cleanKey(w.id_rumah) && isMatchMonth(k, selectedYear, bulan)) ||
         (found.id_transaksi && k.id_transaksi === found.id_transaksi)
@@ -308,7 +348,7 @@ export const InfaqBulananPage: React.FC<{ currentUser?: Pengguna }> = ({ current
       return;
     }
 
-    // KASUS 2: MASUK DANA (BAYAR LUNAS DENGAN UPSERT ANTI-409)
+    // MASUK DANA (BAYAR LUNAS BARU)
     if (!canEdit) return;
 
     const monthCode = String(bulan).padStart(2, '0');
@@ -361,19 +401,17 @@ export const InfaqBulananPage: React.FC<{ currentUser?: Pengguna }> = ({ current
     showToast(`✓ Iuran ${NAMA_BULAN[bulan - 1]} ${w.id_rumah} LUNAS (+Rp 10.000)`, 'success');
   };
 
-  // =========================================================================
-  // PAKSA MASUKKAN 1.028 TRANSAKSI KE CLOUD SUPABASE & LOKAL
-  // =========================================================================
+  // Paksa Masukkan 1.028 Transaksi ke Cloud
   const handleForceInject = async () => {
     if (!rawTextInput.trim()) {
-      alert('Silakan tempel teks catatan transaksi dari file new 3.txt terlebih dahulu!');
+      alert('Silakan tempel teks catatan transaksi dari file new 3.txt!');
       return;
     }
 
     setIsInjecting(true);
     const parsed = parseRawKasTextToRecords(rawTextInput);
     if (parsed.length === 0) {
-      alert('Format teks tidak terdeteksi. Pastikan format sesuai file new 3.txt!');
+      alert('Format teks tidak terdeteksi!');
       setIsInjecting(false);
       return;
     }
@@ -384,9 +422,9 @@ export const InfaqBulananPage: React.FC<{ currentUser?: Pengguna }> = ({ current
     setShowForceModal(false);
 
     if (ok) {
-      showToast(`⚡ Sukses! ${parsed.length} Data Kas Berhasil Masuk Cloud & Lokal!`, 'success');
+      showToast(`⚡ Sukses! ${parsed.length} Data Kas Berhasil Masuk Cloud & HP!`, 'success');
     } else {
-      showToast(`⚠️ Tersimpan di Lokal, Periksa Koneksi Cloud Supabase`, 'cancel');
+      showToast(`⚠️ Data Tersimpan di Lokal, Cloud Sedang Pending`, 'cancel');
     }
   };
 
@@ -558,23 +596,54 @@ export const InfaqBulananPage: React.FC<{ currentUser?: Pengguna }> = ({ current
     showToast('❌ Transaksi kas berhasil dihapus', 'cancel');
   };
 
-  // Memoized Filtering
-  const filteredWarga = useMemo(() => {
+  // =========================================================================
+  // FILTERING, SORTIRAN BLOK/NAMA & PAGINASI RINGAN (O(1))
+  // =========================================================================
+  const processedWarga = useMemo(() => {
     const q = search.toLowerCase().trim();
-    if (!q) return wargaList;
-    return wargaList.filter(w =>
-      (w.nama_lengkap || '').toLowerCase().includes(q) ||
-      (w.id_rumah || '').toLowerCase().includes(q)
-    );
-  }, [wargaList, search]);
+    
+    // 1. Filter Pencarian & Filter Blok
+    let result = wargaList.filter(w => {
+      const matchSearch = !q || 
+        (w.nama_lengkap || '').toLowerCase().includes(q) ||
+        (w.id_rumah || '').toLowerCase().includes(q);
+
+      const matchBlok = filterBlok === 'Semua' || (w.id_rumah || '').toUpperCase().includes(`-${filterBlok}`);
+
+      return matchSearch && matchBlok;
+    });
+
+    // 2. Sortiran Cerdas (Blok, Nama, Total, Tunggakan)
+    result.sort((a, b) => {
+      let comparison = 0;
+      if (sortField === 'id_rumah') {
+        comparison = (a.id_rumah || '').localeCompare(b.id_rumah || '', undefined, { numeric: true, sensitivity: 'base' });
+      } else if (sortField === 'nama_lengkap') {
+        comparison = (a.nama_lengkap || '').localeCompare(b.nama_lengkap || '');
+      } else if (sortField === 'total') {
+        const totA = getCitizenAnnualTotal(a);
+        const totB = getCitizenAnnualTotal(b);
+        comparison = totA - totB;
+      } else if (sortField === 'tunggakan') {
+        const totA = getCitizenAnnualTotal(a);
+        const totB = getCitizenAnnualTotal(b);
+        comparison = totB - totA; // Yang paling sedikit bayar (tunggakan terbesar) ditaruh paling atas
+      }
+
+      return sortDirection === 'asc' ? comparison : -comparison;
+    });
+
+    return result;
+  }, [wargaList, search, filterBlok, sortField, sortDirection, getCitizenAnnualTotal]);
 
   const paginatedWarga = useMemo(() => {
     const start = (pageMatriks - 1) * rowsPerMatriks;
-    return filteredWarga.slice(start, start + rowsPerMatriks);
-  }, [filteredWarga, pageMatriks, rowsPerMatriks]);
+    return processedWarga.slice(start, start + rowsPerMatriks);
+  }, [processedWarga, pageMatriks, rowsPerMatriks]);
 
-  const totalPagesMatriks = Math.ceil(filteredWarga.length / rowsPerMatriks) || 1;
+  const totalPagesMatriks = Math.ceil(processedWarga.length / rowsPerMatriks) || 1;
 
+  // Transaksi List
   const filteredKasTransactions = useMemo(() => {
     const q = search.toLowerCase().trim();
     const yrStr = String(selectedYear);
@@ -626,7 +695,6 @@ export const InfaqBulananPage: React.FC<{ currentUser?: Pengguna }> = ({ current
           </p>
         </div>
         <div className="flex flex-wrap items-center gap-2">
-          {/* TOMBOL PAKSA MASUK KE CLOUD & LOKAL */}
           <button
             onClick={() => setShowForceModal(true)}
             className="flex items-center space-x-1.5 px-3 py-2 bg-gradient-to-r from-amber-600 to-rose-600 hover:from-amber-700 hover:to-rose-700 text-white rounded-xl text-xs font-black shadow-sm transition-all"
@@ -637,7 +705,7 @@ export const InfaqBulananPage: React.FC<{ currentUser?: Pengguna }> = ({ current
           </button>
 
           <button
-            onClick={() => exportMatriksKasToExcel(filteredWarga, kasList, selectedYear)}
+            onClick={() => exportMatriksKasToExcel(processedWarga, kasList, selectedYear)}
             className="flex items-center space-x-1.5 px-3 py-2 bg-white border border-slate-200 text-slate-700 hover:bg-slate-50 rounded-xl text-xs font-bold shadow-2xs transition-all"
           >
             <FileSpreadsheet className="w-3.5 h-3.5 text-emerald-600" />
@@ -665,61 +733,277 @@ export const InfaqBulananPage: React.FC<{ currentUser?: Pengguna }> = ({ current
         </div>
       </div>
 
-      {/* Switcher Tampilan & Pencarian */}
-      <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-3">
-        <div className="flex bg-slate-200/60 p-1 rounded-xl space-x-1 text-xs font-bold">
-          <button
-            onClick={() => setActiveTab('matriks')}
-            className={`px-3.5 py-1.5 rounded-lg transition-all ${
-              activeTab === 'matriks' ? 'bg-white text-emerald-700 shadow-xs' : 'text-slate-600 hover:text-slate-900'
-            }`}
-          >
-            📊 Matriks 12 Bulan ({wargaList.length} KK)
-          </button>
-          <button
-            onClick={() => setActiveTab('transaksi')}
-            className={`px-3.5 py-1.5 rounded-lg transition-all flex items-center space-x-1.5 ${
-              activeTab === 'transaksi' ? 'bg-white text-emerald-700 shadow-xs' : 'text-slate-600 hover:text-slate-900'
-            }`}
-          >
-            <Receipt className="w-3.5 h-3.5" />
-            <span>Daftar Transaksi Kas ({filteredKasTransactions.length})</span>
-          </button>
+      {/* Bar Pengalih Tampilan, Sortiran & Filter Blok */}
+      <div className="bg-white rounded-2xl border border-slate-200 p-3 shadow-xs space-y-3">
+        {/* Bar Atas: Switcher Tab, Mode Visual & Search */}
+        <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-3">
+          <div className="flex flex-wrap items-center gap-2">
+            {/* Tab Matriks vs Transaksi */}
+            <div className="flex bg-slate-100 p-1 rounded-xl space-x-1 text-xs font-bold">
+              <button
+                onClick={() => setActiveTab('matriks')}
+                className={`px-3 py-1.5 rounded-lg transition-all ${
+                  activeTab === 'matriks' ? 'bg-white text-emerald-700 shadow-xs' : 'text-slate-600 hover:text-slate-900'
+                }`}
+              >
+                📊 Matriks 12 Bulan ({wargaList.length} KK)
+              </button>
+              <button
+                onClick={() => setActiveTab('transaksi')}
+                className={`px-3 py-1.5 rounded-lg transition-all flex items-center space-x-1.5 ${
+                  activeTab === 'transaksi' ? 'bg-white text-emerald-700 shadow-xs' : 'text-slate-600 hover:text-slate-900'
+                }`}
+              >
+                <Receipt className="w-3.5 h-3.5" />
+                <span>Daftar Transaksi ({filteredKasTransactions.length})</span>
+              </button>
+            </div>
+
+            {/* Toggle Mode Kartu HP vs Tabel Klasik */}
+            {activeTab === 'matriks' && (
+              <div className="flex bg-slate-100 p-1 rounded-xl space-x-1 text-xs font-bold">
+                <button
+                  onClick={() => setMatrixViewMode('cards')}
+                  className={`px-2.5 py-1.5 rounded-lg flex items-center space-x-1 transition-all ${
+                    matrixViewMode === 'cards' ? 'bg-emerald-600 text-white shadow-xs' : 'text-slate-600 hover:text-slate-900'
+                  }`}
+                  title="Tampilan Kartu Ramah Sentuhan HP"
+                >
+                  <LayoutGrid className="w-3.5 h-3.5" />
+                  <span>📱 Kartu HP</span>
+                </button>
+                <button
+                  onClick={() => setMatrixViewMode('table')}
+                  className={`px-2.5 py-1.5 rounded-lg flex items-center space-x-1 transition-all ${
+                    matrixViewMode === 'table' ? 'bg-emerald-600 text-white shadow-xs' : 'text-slate-600 hover:text-slate-900'
+                  }`}
+                  title="Tampilan Tabel Standar"
+                >
+                  <Table className="w-3.5 h-3.5" />
+                  <span>📊 Tabel</span>
+                </button>
+              </div>
+            )}
+          </div>
+
+          {/* Search Box */}
+          <div className="w-full md:w-72 relative">
+            <Search className="w-4 h-4 absolute left-3.5 top-1/2 -translate-y-1/2 text-slate-400" />
+            <input
+              type="text"
+              placeholder="Cari nama atau blok..."
+              value={search}
+              onChange={(e) => { setSearch(e.target.value); setPageMatriks(1); setPageTrx(1); }}
+              className="w-full pl-10 pr-4 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs outline-none focus:border-emerald-500 shadow-2xs font-medium"
+            />
+          </div>
         </div>
 
-        <div className="w-full sm:w-72 relative">
-          <Search className="w-4 h-4 absolute left-3.5 top-1/2 -translate-y-1/2 text-slate-400" />
-          <input
-            type="text"
-            placeholder="Cari nama warga atau blok unit..."
-            value={search}
-            onChange={(e) => { setSearch(e.target.value); setPageMatriks(1); setPageTrx(1); }}
-            className="w-full pl-10 pr-4 py-2 bg-white border border-slate-200 rounded-xl text-xs outline-none focus:border-emerald-500 shadow-2xs"
-          />
-        </div>
+        {/* Bar Bawah: Filter Blok & Sortiran Cepat */}
+        {activeTab === 'matriks' && (
+          <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-3 pt-2 border-t border-slate-100 text-xs">
+            {/* Filter Cepat Blok A, B, C, D */}
+            <div className="flex items-center space-x-1.5 overflow-x-auto max-w-full pb-1">
+              <span className="text-[11px] font-bold text-slate-400 uppercase mr-1">Blok:</span>
+              {['Semua', 'A', 'B', 'C', 'D'].map(b => (
+                <button
+                  key={b}
+                  onClick={() => { setFilterBlok(b); setPageMatriks(1); }}
+                  className={`px-2.5 py-1 rounded-lg text-xs font-bold transition-all ${
+                    filterBlok === b 
+                      ? 'bg-emerald-600 text-white shadow-xs' 
+                      : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
+                  }`}
+                >
+                  {b === 'Semua' ? 'Semua Blok' : `Blok ${b}`}
+                </button>
+              ))}
+            </div>
+
+            {/* Selector Sortir */}
+            <div className="flex items-center space-x-2 self-end sm:self-center">
+              <span className="text-[11px] font-bold text-slate-400 uppercase">Urutkan:</span>
+              <select
+                value={`${sortField}-${sortDirection}`}
+                onChange={(e) => {
+                  const [f, d] = e.target.value.split('-');
+                  setSortField(f as any);
+                  setSortDirection(d as any);
+                  setPageMatriks(1);
+                }}
+                className="px-2.5 py-1 bg-slate-50 border border-slate-200 rounded-lg text-xs font-bold text-slate-700 outline-none"
+              >
+                <option value="id_rumah-asc">Blok Rumah (A1 ➔ D4)</option>
+                <option value="id_rumah-desc">Blok Rumah (D4 ➔ A1)</option>
+                <option value="nama_lengkap-asc">Nama Warga (A ➔ Z)</option>
+                <option value="nama_lengkap-desc">Nama Warga (Z ➔ A)</option>
+                <option value="total-desc">Total Bayar (Terbanyak)</option>
+                <option value="tunggakan-desc">Tunggakan Terbanyak</option>
+              </select>
+            </div>
+          </div>
+        )}
       </div>
 
-      {/* TAMPILAN 1: MATRIKS 12 BULAN DENGAN MATCHING UNIT RUMAH (ANTI-GAGAL) */}
-      {activeTab === 'matriks' && (
+      {/* ========================================================================= */}
+      {/* TAMPILAN MATRIKS: MODE KARTU HP RAMAH SENTUHAN (MOBILE-FRIENDLY)          */}
+      {/* ========================================================================= */}
+      {activeTab === 'matriks' && matrixViewMode === 'cards' && (
+        <div className="space-y-3">
+          <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-3">
+            {paginatedWarga.length === 0 ? (
+              <div className="col-span-full p-8 text-center bg-white rounded-2xl border text-slate-400 text-xs">
+                Tidak ada data warga yang cocok dengan kriteria pencarian / filter.
+              </div>
+            ) : (
+              paginatedWarga.map((w, idx) => {
+                const totalPaid = getCitizenAnnualTotal(w);
+                const lunasCount = Math.round(totalPaid / 10000);
+                const rowNumber = (pageMatriks - 1) * rowsPerMatriks + idx + 1;
+
+                return (
+                  <div 
+                    key={w.id_warga || idx}
+                    className="bg-white rounded-2xl border border-slate-200 p-4 shadow-xs space-y-3 hover:border-emerald-300 transition-all"
+                  >
+                    {/* Header Kartu Warga */}
+                    <div className="flex justify-between items-start">
+                      <div className="flex items-center space-x-2.5 min-w-0 pr-2">
+                        <span className="w-6 text-[11px] font-mono font-bold text-slate-400 text-center shrink-0">
+                          #{rowNumber}
+                        </span>
+                        <div className="truncate">
+                          <div className="flex items-center space-x-1.5">
+                            <span className="px-2 py-0.5 rounded-md font-mono font-bold text-xs bg-emerald-50 text-emerald-800 border border-emerald-200">
+                              {w.id_rumah || '-'}
+                            </span>
+                            <span className="text-[10px] text-slate-400">• {lunasCount}/12 Bln</span>
+                          </div>
+                          <h4 className="font-bold text-slate-900 text-sm mt-1 truncate">{w.nama_lengkap}</h4>
+                        </div>
+                      </div>
+                      <div className="text-right shrink-0">
+                        <span className="text-[9px] text-slate-400 uppercase font-bold block">Total Kas</span>
+                        <span className="font-black text-emerald-700 text-sm">{formatRupiah(totalPaid)}</span>
+                      </div>
+                    </div>
+
+                    {/* 12 Kotak Bulan Ramah Sentuhan Jempol di HP */}
+                    <div className="grid grid-cols-4 sm:grid-cols-6 gap-1.5 pt-2 border-t border-slate-100">
+                      {Array.from({ length: 12 }, (_, i) => i + 1).map((bulan) => {
+                        const found = getKasItem(w, bulan);
+                        const isSudahLunas = Boolean(found);
+
+                        return (
+                          <button
+                            key={bulan}
+                            type="button"
+                            onClick={() => handleCellClick(w, bulan)}
+                            onContextMenu={(e) => {
+                              e.preventDefault();
+                              if (found) bukaKuitansi(w, found, bulan);
+                            }}
+                            className={`py-2 px-1 rounded-xl text-center flex flex-col items-center justify-center transition-all select-none active:scale-95 ${
+                              isSudahLunas 
+                                ? 'bg-emerald-600 text-white font-bold shadow-xs hover:bg-rose-600' 
+                                : 'bg-slate-100 text-slate-600 hover:bg-emerald-100 hover:text-emerald-700 border border-slate-200'
+                            }`}
+                            title={isSudahLunas ? `Lunas ${NAMA_BULAN[bulan - 1]}. Klik untuk Batalkan.` : `Klik untuk Catat Lunas ${NAMA_BULAN[bulan - 1]}.`}
+                          >
+                            <span className="text-[10px] uppercase font-bold tracking-tight">
+                              {NAMA_BULAN[bulan - 1].slice(0, 3)}
+                            </span>
+                            <span className="text-xs font-black mt-0.5">
+                              {isSudahLunas ? '✓' : '✕'}
+                            </span>
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </div>
+                );
+              })
+            )}
+          </div>
+
+          {/* Bar Paginasi Kartu */}
+          <div className="p-3 bg-white rounded-2xl border border-slate-200 flex flex-col sm:flex-row items-center justify-between gap-2 text-xs text-slate-600 shadow-xs">
+            <div>
+              Menampilkan <strong>{(pageMatriks - 1) * rowsPerMatriks + 1}</strong> - <strong>{Math.min(pageMatriks * rowsPerMatriks, processedWarga.length)}</strong> dari <strong>{processedWarga.length}</strong> KK Warga
+            </div>
+            <div className="flex items-center space-x-1.5">
+              <button
+                disabled={pageMatriks <= 1}
+                onClick={() => setPageMatriks(p => Math.max(1, p - 1))}
+                className="p-1.5 rounded-lg border border-slate-200 bg-white hover:bg-slate-100 disabled:opacity-40 disabled:cursor-not-allowed"
+                title="Halaman Sebelumnya"
+              >
+                <ChevronLeft className="w-4 h-4" />
+              </button>
+              <span className="px-2.5 font-bold text-slate-800">
+                Hal {pageMatriks} / {totalPagesMatriks}
+              </span>
+              <button
+                disabled={pageMatriks >= totalPagesMatriks}
+                onClick={() => setPageMatriks(p => Math.min(totalPagesMatriks, p + 1))}
+                className="p-1.5 rounded-lg border border-slate-200 bg-white hover:bg-slate-100 disabled:opacity-40 disabled:cursor-not-allowed"
+                title="Halaman Selanjutnya"
+              >
+                <ChevronRight className="w-4 h-4" />
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ========================================================================= */}
+      {/* TAMPILAN MATRIKS: TABEL STANDAR DENGAN SORTIR KLIK HEADER                 */}
+      {/* ========================================================================= */}
+      {activeTab === 'matriks' && matrixViewMode === 'table' && (
         <div className="bg-white rounded-2xl border border-slate-200 shadow-xs overflow-hidden">
           <div className="overflow-x-auto">
             <table className="w-full text-left text-xs border-collapse">
               <thead className="bg-slate-100 text-[10px] uppercase font-bold text-slate-600 border-b select-none">
                 <tr>
                   <th className="px-3 py-3 text-center border-r w-12 sticky left-0 bg-slate-100 z-10">No.</th>
-                  <th className="px-3 py-3 border-r min-w-[70px] sticky left-[48px] bg-slate-100 z-10">Blok</th>
-                  <th className="px-3 py-3 border-r min-w-[160px] sticky left-[118px] bg-slate-100 z-10">Nama Warga</th>
+                  
+                  {/* Header Sortir Blok */}
+                  <th 
+                    onClick={() => handleSort('id_rumah')}
+                    className="px-3 py-3 border-r min-w-[80px] sticky left-[48px] bg-slate-100 z-10 cursor-pointer hover:bg-slate-200 transition-colors"
+                  >
+                    <span>Blok</span>
+                    {renderSortIcon('id_rumah')}
+                  </th>
+
+                  {/* Header Sortir Nama */}
+                  <th 
+                    onClick={() => handleSort('nama_lengkap')}
+                    className="px-4 py-3 border-r min-w-[160px] sticky left-[128px] bg-slate-100 z-10 cursor-pointer hover:bg-slate-200 transition-colors"
+                  >
+                    <span>Nama Warga</span>
+                    {renderSortIcon('nama_lengkap')}
+                  </th>
+
                   {NAMA_BULAN.map((m) => (
                     <th key={m} className="px-2 py-3 text-center border-r min-w-[45px]">{m.slice(0, 3)}</th>
                   ))}
-                  <th className="px-3 py-3 text-right min-w-[90px]">Total</th>
+
+                  {/* Header Sortir Total */}
+                  <th 
+                    onClick={() => handleSort('total')}
+                    className="px-3 py-3 text-right min-w-[95px] cursor-pointer hover:bg-slate-200 transition-colors"
+                  >
+                    <span>Total</span>
+                    {renderSortIcon('total')}
+                  </th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-100">
                 {paginatedWarga.length === 0 ? (
                   <tr>
                     <td colSpan={16} className="px-4 py-8 text-center text-slate-400">
-                      Tidak ada data warga yang cocok dengan pencarian "{search}".
+                      Tidak ada data warga yang cocok dengan pencarian / filter.
                     </td>
                   </tr>
                 ) : (
@@ -731,7 +1015,7 @@ export const InfaqBulananPage: React.FC<{ currentUser?: Pengguna }> = ({ current
                       <tr key={w.id_warga || idx} className="hover:bg-slate-50 transition-colors">
                         <td className="px-3 py-2 text-center font-mono text-slate-400 border-r sticky left-0 bg-white z-10">{rowNumber}</td>
                         <td className="px-3 py-2 font-bold text-slate-800 border-r sticky left-[48px] bg-white z-10 whitespace-nowrap">{w.id_rumah || '-'}</td>
-                        <td className="px-4 py-2 font-bold text-slate-900 border-r sticky left-[118px] bg-white z-10 truncate max-w-[180px]">{w.nama_lengkap}</td>
+                        <td className="px-4 py-2 font-bold text-slate-900 border-r sticky left-[128px] bg-white z-10 truncate max-w-[180px]">{w.nama_lengkap}</td>
                         
                         {Array.from({ length: 12 }, (_, i) => i + 1).map((bulan) => {
                           const found = getKasItem(w, bulan);
@@ -774,10 +1058,10 @@ export const InfaqBulananPage: React.FC<{ currentUser?: Pengguna }> = ({ current
             </table>
           </div>
 
-          {/* Bar Paginasi */}
+          {/* Bar Paginasi Tabel */}
           <div className="p-3 bg-slate-50 border-t border-slate-200 flex flex-col sm:flex-row items-center justify-between gap-2 text-xs text-slate-600">
             <div>
-              Menampilkan <strong>{(pageMatriks - 1) * rowsPerMatriks + 1}</strong> - <strong>{Math.min(pageMatriks * rowsPerMatriks, filteredWarga.length)}</strong> dari <strong>{filteredWarga.length}</strong> KK Warga
+              Menampilkan <strong>{(pageMatriks - 1) * rowsPerMatriks + 1}</strong> - <strong>{Math.min(pageMatriks * rowsPerMatriks, processedWarga.length)}</strong> dari <strong>{processedWarga.length}</strong> KK Warga
             </div>
             <div className="flex items-center space-x-1.5">
               <button
@@ -804,7 +1088,9 @@ export const InfaqBulananPage: React.FC<{ currentUser?: Pengguna }> = ({ current
         </div>
       )}
 
-      {/* TAMPILAN 2: DAFTAR TRANSAKSI KAS */}
+      {/* ========================================================================= */}
+      {/* TAMPILAN 2: DAFTAR TRANSAKSI KAS                                          */}
+      {/* ========================================================================= */}
       {activeTab === 'transaksi' && (
         <div className="bg-white rounded-2xl border border-slate-200 shadow-xs overflow-hidden">
           <div className="overflow-x-auto">
@@ -929,20 +1215,20 @@ export const InfaqBulananPage: React.FC<{ currentUser?: Pengguna }> = ({ current
         </div>
       )}
 
-      {/* MODAL PAKSA MASUK KE CLOUD & LOKAL */}
+      {/* MODAL PAKSA MASUK 1.028 TRANSAKSI */}
       {showForceModal && (
         <div className="fixed inset-0 bg-slate-900/60 flex items-center justify-center p-4 z-50 backdrop-blur-xs">
           <div className="bg-white rounded-3xl shadow-2xl w-full max-w-lg p-6 space-y-4 max-h-[90vh] overflow-y-auto">
             <div className="flex justify-between items-center border-b pb-3">
               <div className="flex items-center space-x-2">
                 <Database className="w-5 h-5 text-amber-600" />
-                <h3 className="font-black text-slate-900 text-sm">Paksa Kunci 1.028 Data Kas ke Cloud & HP</h3>
+                <h3 className="font-black text-slate-900 text-sm">Paksa Kunci 1.028 Data Kas ke Cloud</h3>
               </div>
               <button onClick={() => setShowForceModal(false)}><X className="w-4 h-4" /></button>
             </div>
 
             <p className="text-xs text-slate-600 leading-relaxed">
-              Buka file <strong>new 3.txt</strong>, salin seluruh isinya (Ctrl+A lalu Ctrl+C), kemudian tempelkan di kotak bawah ini. Sistem akan langsung mengunggah dan mengunci seluruh 1.028 transaksi ke database Supabase sehingga <strong>di HP dan Laptop langsung muncul bersamaan detik ini juga!</strong>
+              Buka file <strong>new 3.txt</strong>, salin seluruh isinya (Ctrl+A lalu Ctrl+C), kemudian tempelkan di kotak bawah ini. Sistem akan langsung mengunggah dan mengunci seluruh 1.028 transaksi ke Supabase Cloud sehingga <strong>di HP dan Laptop langsung muncul bersamaan detik ini juga!</strong>
             </p>
 
             <textarea
