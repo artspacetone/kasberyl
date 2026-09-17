@@ -6,12 +6,14 @@ import {
   CheckCircle2, Search, Plus, X, FileSpreadsheet, 
   Edit2, Trash2, Receipt, ExternalLink,
   ChevronLeft, ChevronRight, Zap, ShieldCheck, Database, Radio,
-  ArrowUpDown, ArrowUp, ArrowDown, LayoutGrid, Table, Home, UserCheck
+  ArrowUpDown, ArrowUp, ArrowDown, LayoutGrid, Table,
+  MessageCircle, AlertTriangle
 } from 'lucide-react';
 import { WargaSearchSelect } from '../components/WargaSearchSelect';
 import { exportMatriksKasToExcel } from '../utils/exportManager';
 import { KuitansiModal, KuitansiData } from '../components/KuitansiModal';
 import { ImageViewerModal } from '../components/ImageViewerModal';
+import { TagihanModal, TagihanData } from '../components/TagihanModal';
 import { 
   parseRawKasTextToRecords, 
   forceInjectKasData, 
@@ -28,16 +30,13 @@ export const InfaqBulananPage: React.FC<{ currentUser?: Pengguna }> = ({ current
   const [kasList, setKasList] = useState<KasWargaBeryl[]>([]);
   const [loading, setLoading] = useState(true);
   
-  // Tampilan Utama: 'matriks' | 'transaksi'
   const [activeTab, setActiveTab] = useState<'matriks' | 'transaksi'>('matriks');
-  
-  // Mode Visual Matriks: 'table' (Tabel Klasik) vs 'cards' (Kartu HP Ramah Sentuhan)
   const [matrixViewMode, setMatrixViewMode] = useState<'table' | 'cards'>('cards');
   
-  // State Pencarian & Tahun
   const [search, setSearch] = useState('');
   const [selectedYear, setSelectedYear] = useState<number>(2026);
   const [filterBlok, setFilterBlok] = useState<string>('Semua');
+  const [filterHanyaNunggak, setFilterHanyaNunggak] = useState<boolean>(false);
 
   // State Sortir Matriks
   const [sortField, setSortField] = useState<'id_rumah' | 'nama_lengkap' | 'total' | 'tunggakan'>('id_rumah');
@@ -46,15 +45,17 @@ export const InfaqBulananPage: React.FC<{ currentUser?: Pengguna }> = ({ current
   // Toast Notification
   const [toastMessage, setToastMessage] = useState<{ text: string; type: 'success' | 'cancel' } | null>(null);
 
-  // Modal Input Paksa 1028
+  // Modal State
   const [showForceModal, setShowForceModal] = useState(false);
   const [rawTextInput, setRawTextInput] = useState('');
   const [isInjecting, setIsInjecting] = useState(false);
 
-  // Flag lock anti-reload loop
+  // Modal Penagihan Santun WhatsApp
+  const [tagihanModalData, setTagihanModalData] = useState<TagihanData | null>(null);
+
   const isSelfUpdatingRef = useRef(false);
 
-  // Paginasi Cerdas O(1)
+  // Paginasi
   const [pageMatriks, setPageMatriks] = useState(1);
   const [rowsPerMatriks, setRowsPerMatriks] = useState(40);
   const [pageTrx, setPageTrx] = useState(1);
@@ -98,7 +99,7 @@ export const InfaqBulananPage: React.FC<{ currentUser?: Pengguna }> = ({ current
     setTimeout(() => setToastMessage(null), 2500);
   }, []);
 
-  // Matching Cerdas Berdasarkan Rumah & Nama
+  // Matching Cerdas
   const isMatchWarga = useCallback((k: KasWargaBeryl, w: Warga): boolean => {
     const rK = cleanKey(k.id_rumah);
     const rW = cleanKey(w.id_rumah);
@@ -137,9 +138,7 @@ export const InfaqBulananPage: React.FC<{ currentUser?: Pengguna }> = ({ current
     return false;
   }, []);
 
-  // =========================================================================
-  // LOAD DATA SUPABASE CLOUD & LOKAL
-  // =========================================================================
+  // LOAD DATA
   const loadData = useCallback(async () => {
     setLoading(true);
     let loadedWarga: Warga[] = [];
@@ -183,7 +182,7 @@ export const InfaqBulananPage: React.FC<{ currentUser?: Pengguna }> = ({ current
           localStorage.setItem('local_kas', JSON.stringify(loadedKas));
         }
       } catch (err: any) {
-        console.warn('Menggunakan data lokal:', err.message);
+        console.warn('Menggunakan data kas lokal:', err.message);
       }
     }
 
@@ -192,7 +191,6 @@ export const InfaqBulananPage: React.FC<{ currentUser?: Pengguna }> = ({ current
     setLoading(false);
   }, []);
 
-  // REALTIME WEBSOCKET
   useEffect(() => {
     loadData();
 
@@ -270,7 +268,7 @@ export const InfaqBulananPage: React.FC<{ currentUser?: Pengguna }> = ({ current
     );
   }, [kasMatrixMap]);
 
-  // Hitung Total Bayar Setahun per Warga untuk Sortir Cepat
+  // Hitung Total Bayar Setahun per Warga
   const getCitizenAnnualTotal = useCallback((w: Warga): number => {
     let tot = 0;
     for (let m = 1; m <= 12; m++) {
@@ -280,7 +278,39 @@ export const InfaqBulananPage: React.FC<{ currentUser?: Pengguna }> = ({ current
     return tot;
   }, [getKasItem]);
 
-  // Handler Sortir
+  // Helper Menghitung Bulan Menunggak untuk Penagihan Santun
+  const getTunggakanDetails = useCallback((w: Warga, year: number) => {
+    const unpaid: string[] = [];
+    for (let m = 1; m <= 12; m++) {
+      const isPaid = Boolean(getKasItem(w, m));
+      if (!isPaid) {
+        unpaid.push(`${NAMA_BULAN[m - 1]} ${year}`);
+      }
+    }
+    return {
+      unpaidMonths: unpaid,
+      totalTagihan: unpaid.length * 10000
+    };
+  }, [getKasItem]);
+
+  // Handler Membuka Modal Tagihan WhatsApp
+  const handleOpenTagihan = (w: Warga) => {
+    const { unpaidMonths, totalTagihan } = getTunggakanDetails(w, selectedYear);
+    if (unpaidMonths.length === 0) {
+      alert(`Warga ${w.nama_lengkap} (${w.id_rumah}) sudah lunas 12 bulan penuh di tahun ${selectedYear}!`);
+      return;
+    }
+
+    setTagihanModalData({
+      namaWarga: w.nama_lengkap,
+      idRumah: w.id_rumah || '-',
+      noHp: w.no_hp,
+      bulanMenunggak: unpaidMonths,
+      totalNominal: totalTagihan,
+      tahun: selectedYear,
+    });
+  };
+
   const handleSort = (field: 'id_rumah' | 'nama_lengkap' | 'total' | 'tunggakan') => {
     if (sortField === field) {
       setSortDirection(prev => (prev === 'asc' ? 'desc' : 'asc'));
@@ -300,13 +330,11 @@ export const InfaqBulananPage: React.FC<{ currentUser?: Pengguna }> = ({ current
     );
   };
 
-  // =========================================================================
-  // KLIK 1X MASUK DANA, KLIK 2X BATALKAN (TARGETED & AMAN)
-  // =========================================================================
+  // KLIK 1X MASUK DANA, KLIK 2X BATAL
   const handleCellClick = async (w: Warga, bulan: number) => {
     const found = getKasItem(w, bulan);
 
-    // BATALKAN PEMBAYARAN
+    // KASUS 1: BATALKAN PEMBAYARAN
     if (found) {
       if (!canEdit) {
         bukaKuitansi(w, found, bulan);
@@ -348,7 +376,7 @@ export const InfaqBulananPage: React.FC<{ currentUser?: Pengguna }> = ({ current
       return;
     }
 
-    // MASUK DANA (BAYAR LUNAS BARU)
+    // KASUS 2: MASUK DANA (BAYAR LUNAS BARU)
     if (!canEdit) return;
 
     const monthCode = String(bulan).padStart(2, '0');
@@ -401,7 +429,6 @@ export const InfaqBulananPage: React.FC<{ currentUser?: Pengguna }> = ({ current
     showToast(`✓ Iuran ${NAMA_BULAN[bulan - 1]} ${w.id_rumah} LUNAS (+Rp 10.000)`, 'success');
   };
 
-  // Paksa Masukkan 1.028 Transaksi ke Cloud
   const handleForceInject = async () => {
     if (!rawTextInput.trim()) {
       alert('Silakan tempel teks catatan transaksi dari file new 3.txt!');
@@ -597,12 +624,11 @@ export const InfaqBulananPage: React.FC<{ currentUser?: Pengguna }> = ({ current
   };
 
   // =========================================================================
-  // FILTERING, SORTIRAN BLOK/NAMA & PAGINASI RINGAN (O(1))
+  // FILTERING, SORTIRAN & PERHITUNGAN NUNGGAK
   // =========================================================================
   const processedWarga = useMemo(() => {
     const q = search.toLowerCase().trim();
     
-    // 1. Filter Pencarian & Filter Blok
     let result = wargaList.filter(w => {
       const matchSearch = !q || 
         (w.nama_lengkap || '').toLowerCase().includes(q) ||
@@ -610,10 +636,16 @@ export const InfaqBulananPage: React.FC<{ currentUser?: Pengguna }> = ({ current
 
       const matchBlok = filterBlok === 'Semua' || (w.id_rumah || '').toUpperCase().includes(`-${filterBlok}`);
 
-      return matchSearch && matchBlok;
+      // Filter Khusus Warga Menunggak
+      let matchNunggak = true;
+      if (filterHanyaNunggak) {
+        const total = getCitizenAnnualTotal(w);
+        matchNunggak = total < 120000; // Jika belum lunas 12 bulan
+      }
+
+      return matchSearch && matchBlok && matchNunggak;
     });
 
-    // 2. Sortiran Cerdas (Blok, Nama, Total, Tunggakan)
     result.sort((a, b) => {
       let comparison = 0;
       if (sortField === 'id_rumah') {
@@ -627,14 +659,14 @@ export const InfaqBulananPage: React.FC<{ currentUser?: Pengguna }> = ({ current
       } else if (sortField === 'tunggakan') {
         const totA = getCitizenAnnualTotal(a);
         const totB = getCitizenAnnualTotal(b);
-        comparison = totB - totA; // Yang paling sedikit bayar (tunggakan terbesar) ditaruh paling atas
+        comparison = totB - totA; // Yang belum bayar paling banyak di atas
       }
 
       return sortDirection === 'asc' ? comparison : -comparison;
     });
 
     return result;
-  }, [wargaList, search, filterBlok, sortField, sortDirection, getCitizenAnnualTotal]);
+  }, [wargaList, search, filterBlok, filterHanyaNunggak, sortField, sortDirection, getCitizenAnnualTotal]);
 
   const paginatedWarga = useMemo(() => {
     const start = (pageMatriks - 1) * rowsPerMatriks;
@@ -642,6 +674,11 @@ export const InfaqBulananPage: React.FC<{ currentUser?: Pengguna }> = ({ current
   }, [processedWarga, pageMatriks, rowsPerMatriks]);
 
   const totalPagesMatriks = Math.ceil(processedWarga.length / rowsPerMatriks) || 1;
+
+  // Total Warga Menunggak Keseluruhan
+  const totalWargaNunggakCount = useMemo(() => {
+    return wargaList.filter(w => getCitizenAnnualTotal(w) < 120000).length;
+  }, [wargaList, getCitizenAnnualTotal]);
 
   // Transaksi List
   const filteredKasTransactions = useMemo(() => {
@@ -691,7 +728,7 @@ export const InfaqBulananPage: React.FC<{ currentUser?: Pengguna }> = ({ current
             </span>
           </div>
           <p className="text-xs text-slate-500 mt-0.5">
-            ⚡ <strong>Klik 1x</strong> untuk Masuk Dana (Lunas) • <strong>Klik 2x / Klik Ulang</strong> untuk Batalkan Pembayaran.
+            ⚡ <strong>Klik 1x</strong> untuk Masuk Dana (Lunas) • <strong>Klik 2x</strong> Batalkan • <strong>Kirim Tagihan WA</strong> untuk warga yang belum lunas.
           </p>
         </div>
         <div className="flex flex-wrap items-center gap-2">
@@ -735,10 +772,8 @@ export const InfaqBulananPage: React.FC<{ currentUser?: Pengguna }> = ({ current
 
       {/* Bar Pengalih Tampilan, Sortiran & Filter Blok */}
       <div className="bg-white rounded-2xl border border-slate-200 p-3 shadow-xs space-y-3">
-        {/* Bar Atas: Switcher Tab, Mode Visual & Search */}
         <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-3">
           <div className="flex flex-wrap items-center gap-2">
-            {/* Tab Matriks vs Transaksi */}
             <div className="flex bg-slate-100 p-1 rounded-xl space-x-1 text-xs font-bold">
               <button
                 onClick={() => setActiveTab('matriks')}
@@ -759,7 +794,6 @@ export const InfaqBulananPage: React.FC<{ currentUser?: Pengguna }> = ({ current
               </button>
             </div>
 
-            {/* Toggle Mode Kartu HP vs Tabel Klasik */}
             {activeTab === 'matriks' && (
               <div className="flex bg-slate-100 p-1 rounded-xl space-x-1 text-xs font-bold">
                 <button
@@ -786,7 +820,6 @@ export const InfaqBulananPage: React.FC<{ currentUser?: Pengguna }> = ({ current
             )}
           </div>
 
-          {/* Search Box */}
           <div className="w-full md:w-72 relative">
             <Search className="w-4 h-4 absolute left-3.5 top-1/2 -translate-y-1/2 text-slate-400" />
             <input
@@ -799,11 +832,10 @@ export const InfaqBulananPage: React.FC<{ currentUser?: Pengguna }> = ({ current
           </div>
         </div>
 
-        {/* Bar Bawah: Filter Blok & Sortiran Cepat */}
+        {/* Filter Blok, Sortiran & Filter Khusus Nunggak */}
         {activeTab === 'matriks' && (
-          <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-3 pt-2 border-t border-slate-100 text-xs">
-            {/* Filter Cepat Blok A, B, C, D */}
-            <div className="flex items-center space-x-1.5 overflow-x-auto max-w-full pb-1">
+          <div className="flex flex-col lg:flex-row justify-between items-start lg:items-center gap-3 pt-2 border-t border-slate-100 text-xs">
+            <div className="flex flex-wrap items-center gap-1.5">
               <span className="text-[11px] font-bold text-slate-400 uppercase mr-1">Blok:</span>
               {['Semua', 'A', 'B', 'C', 'D'].map(b => (
                 <button
@@ -818,10 +850,22 @@ export const InfaqBulananPage: React.FC<{ currentUser?: Pengguna }> = ({ current
                   {b === 'Semua' ? 'Semua Blok' : `Blok ${b}`}
                 </button>
               ))}
+
+              {/* Tombol Filter Cepat Hanya Nunggak */}
+              <button
+                onClick={() => { setFilterHanyaNunggak(!filterHanyaNunggak); setPageMatriks(1); }}
+                className={`ml-2 px-3 py-1 rounded-lg text-xs font-bold transition-all flex items-center space-x-1 ${
+                  filterHanyaNunggak 
+                    ? 'bg-rose-600 text-white shadow-xs' 
+                    : 'bg-rose-50 text-rose-700 border border-rose-200 hover:bg-rose-100'
+                }`}
+              >
+                <AlertTriangle className="w-3.5 h-3.5" />
+                <span>Hanya Nunggak ({totalWargaNunggakCount} KK)</span>
+              </button>
             </div>
 
-            {/* Selector Sortir */}
-            <div className="flex items-center space-x-2 self-end sm:self-center">
+            <div className="flex items-center space-x-2 self-end lg:self-center">
               <span className="text-[11px] font-bold text-slate-400 uppercase">Urutkan:</span>
               <select
                 value={`${sortField}-${sortDirection}`}
@@ -846,7 +890,7 @@ export const InfaqBulananPage: React.FC<{ currentUser?: Pengguna }> = ({ current
       </div>
 
       {/* ========================================================================= */}
-      {/* TAMPILAN MATRIKS: MODE KARTU HP RAMAH SENTUHAN (MOBILE-FRIENDLY)          */}
+      {/* TAMPILAN MATRIKS: KARTU HP DENGAN TOMBOL TAGIHAN SANTUN WHATSAPP          */}
       {/* ========================================================================= */}
       {activeTab === 'matriks' && matrixViewMode === 'cards' && (
         <div className="space-y-3">
@@ -859,14 +903,17 @@ export const InfaqBulananPage: React.FC<{ currentUser?: Pengguna }> = ({ current
               paginatedWarga.map((w, idx) => {
                 const totalPaid = getCitizenAnnualTotal(w);
                 const lunasCount = Math.round(totalPaid / 10000);
+                const isNunggak = lunasCount < 12;
                 const rowNumber = (pageMatriks - 1) * rowsPerMatriks + idx + 1;
 
                 return (
                   <div 
                     key={w.id_warga || idx}
-                    className="bg-white rounded-2xl border border-slate-200 p-4 shadow-xs space-y-3 hover:border-emerald-300 transition-all"
+                    className={`bg-white rounded-2xl border p-4 shadow-xs space-y-3 transition-all ${
+                      isNunggak ? 'border-slate-200 hover:border-amber-300' : 'border-emerald-200 bg-emerald-50/20'
+                    }`}
                   >
-                    {/* Header Kartu Warga */}
+                    {/* Header Kartu */}
                     <div className="flex justify-between items-start">
                       <div className="flex items-center space-x-2.5 min-w-0 pr-2">
                         <span className="w-6 text-[11px] font-mono font-bold text-slate-400 text-center shrink-0">
@@ -882,13 +929,14 @@ export const InfaqBulananPage: React.FC<{ currentUser?: Pengguna }> = ({ current
                           <h4 className="font-bold text-slate-900 text-sm mt-1 truncate">{w.nama_lengkap}</h4>
                         </div>
                       </div>
+
                       <div className="text-right shrink-0">
                         <span className="text-[9px] text-slate-400 uppercase font-bold block">Total Kas</span>
                         <span className="font-black text-emerald-700 text-sm">{formatRupiah(totalPaid)}</span>
                       </div>
                     </div>
 
-                    {/* 12 Kotak Bulan Ramah Sentuhan Jempol di HP */}
+                    {/* 12 Kotak Bulan */}
                     <div className="grid grid-cols-4 sm:grid-cols-6 gap-1.5 pt-2 border-t border-slate-100">
                       {Array.from({ length: 12 }, (_, i) => i + 1).map((bulan) => {
                         const found = getKasItem(w, bulan);
@@ -920,6 +968,25 @@ export const InfaqBulananPage: React.FC<{ currentUser?: Pengguna }> = ({ current
                         );
                       })}
                     </div>
+
+                    {/* Tombol Khusus Tagihan WhatsApp (Hanya Muncul Jika Ada Tunggakan) */}
+                    {isNunggak && (
+                      <div className="pt-2 border-t border-slate-100 flex justify-between items-center text-xs">
+                        <span className="text-[10px] font-bold text-rose-600 flex items-center space-x-1">
+                          <AlertTriangle className="w-3 h-3" />
+                          <span>Kurang {12 - lunasCount} Bln</span>
+                        </span>
+
+                        <button
+                          type="button"
+                          onClick={() => handleOpenTagihan(w)}
+                          className="inline-flex items-center space-x-1.5 px-3 py-1.5 bg-gradient-to-r from-amber-600 to-rose-600 hover:from-amber-700 hover:to-rose-700 text-white rounded-xl text-[11px] font-bold shadow-xs transition-all active:scale-95"
+                        >
+                          <MessageCircle className="w-3.5 h-3.5" />
+                          <span>Kirim Tagihan WA</span>
+                        </button>
+                      </div>
+                    )}
                   </div>
                 );
               })
@@ -957,7 +1024,7 @@ export const InfaqBulananPage: React.FC<{ currentUser?: Pengguna }> = ({ current
       )}
 
       {/* ========================================================================= */}
-      {/* TAMPILAN MATRIKS: TABEL STANDAR DENGAN SORTIR KLIK HEADER                 */}
+      {/* TAMPILAN MATRIKS: TABEL STANDAR DENGAN TOMBOL TAGIHAN WA                  */}
       {/* ========================================================================= */}
       {activeTab === 'matriks' && matrixViewMode === 'table' && (
         <div className="bg-white rounded-2xl border border-slate-200 shadow-xs overflow-hidden">
@@ -967,7 +1034,6 @@ export const InfaqBulananPage: React.FC<{ currentUser?: Pengguna }> = ({ current
                 <tr>
                   <th className="px-3 py-3 text-center border-r w-12 sticky left-0 bg-slate-100 z-10">No.</th>
                   
-                  {/* Header Sortir Blok */}
                   <th 
                     onClick={() => handleSort('id_rumah')}
                     className="px-3 py-3 border-r min-w-[80px] sticky left-[48px] bg-slate-100 z-10 cursor-pointer hover:bg-slate-200 transition-colors"
@@ -976,7 +1042,6 @@ export const InfaqBulananPage: React.FC<{ currentUser?: Pengguna }> = ({ current
                     {renderSortIcon('id_rumah')}
                   </th>
 
-                  {/* Header Sortir Nama */}
                   <th 
                     onClick={() => handleSort('nama_lengkap')}
                     className="px-4 py-3 border-r min-w-[160px] sticky left-[128px] bg-slate-100 z-10 cursor-pointer hover:bg-slate-200 transition-colors"
@@ -989,7 +1054,6 @@ export const InfaqBulananPage: React.FC<{ currentUser?: Pengguna }> = ({ current
                     <th key={m} className="px-2 py-3 text-center border-r min-w-[45px]">{m.slice(0, 3)}</th>
                   ))}
 
-                  {/* Header Sortir Total */}
                   <th 
                     onClick={() => handleSort('total')}
                     className="px-3 py-3 text-right min-w-[95px] cursor-pointer hover:bg-slate-200 transition-colors"
@@ -997,12 +1061,13 @@ export const InfaqBulananPage: React.FC<{ currentUser?: Pengguna }> = ({ current
                     <span>Total</span>
                     {renderSortIcon('total')}
                   </th>
+                  <th className="px-3 py-3 text-center min-w-[90px]">Tagihan</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-100">
                 {paginatedWarga.length === 0 ? (
                   <tr>
-                    <td colSpan={16} className="px-4 py-8 text-center text-slate-400">
+                    <td colSpan={17} className="px-4 py-8 text-center text-slate-400">
                       Tidak ada data warga yang cocok dengan pencarian / filter.
                     </td>
                   </tr>
@@ -1050,6 +1115,20 @@ export const InfaqBulananPage: React.FC<{ currentUser?: Pengguna }> = ({ current
                           );
                         })}
                         <td className="px-3 py-2 text-right font-black text-emerald-700 whitespace-nowrap">{formatRupiah(totalPaid)}</td>
+                        <td className="px-3 py-2 text-center whitespace-nowrap">
+                          {totalPaid < 120000 ? (
+                            <button
+                              type="button"
+                              onClick={() => handleOpenTagihan(w)}
+                              className="p-1 text-amber-600 hover:text-amber-700 hover:bg-amber-50 rounded-lg"
+                              title="Kirim Tagihan Santun via WA"
+                            >
+                              <MessageCircle className="w-4 h-4 inline" />
+                            </button>
+                          ) : (
+                            <span className="text-emerald-600 text-[10px] font-bold">Lunas 100%</span>
+                          )}
+                        </td>
                       </tr>
                     );
                   })
@@ -1088,9 +1167,7 @@ export const InfaqBulananPage: React.FC<{ currentUser?: Pengguna }> = ({ current
         </div>
       )}
 
-      {/* ========================================================================= */}
-      {/* TAMPILAN 2: DAFTAR TRANSAKSI KAS                                          */}
-      {/* ========================================================================= */}
+      {/* TAMPILAN 2: DAFTAR TRANSAKSI KAS */}
       {activeTab === 'transaksi' && (
         <div className="bg-white rounded-2xl border border-slate-200 shadow-xs overflow-hidden">
           <div className="overflow-x-auto">
@@ -1215,14 +1292,14 @@ export const InfaqBulananPage: React.FC<{ currentUser?: Pengguna }> = ({ current
         </div>
       )}
 
-      {/* MODAL PAKSA MASUK 1.028 TRANSAKSI */}
+      {/* MODAL PAKSA MASUK KE CLOUD & LOKAL */}
       {showForceModal && (
         <div className="fixed inset-0 bg-slate-900/60 flex items-center justify-center p-4 z-50 backdrop-blur-xs">
           <div className="bg-white rounded-3xl shadow-2xl w-full max-w-lg p-6 space-y-4 max-h-[90vh] overflow-y-auto">
             <div className="flex justify-between items-center border-b pb-3">
               <div className="flex items-center space-x-2">
                 <Database className="w-5 h-5 text-amber-600" />
-                <h3 className="font-black text-slate-900 text-sm">Paksa Kunci 1.028 Data Kas ke Cloud</h3>
+                <h3 className="font-black text-slate-900 text-sm">Paksa Kunci 1.028 Data Kas ke Cloud & HP</h3>
               </div>
               <button onClick={() => setShowForceModal(false)}><X className="w-4 h-4" /></button>
             </div>
@@ -1413,6 +1490,9 @@ export const InfaqBulananPage: React.FC<{ currentUser?: Pengguna }> = ({ current
           </div>
         </div>
       )}
+
+      {/* Modal Tagihan Santun WhatsApp (BCA 8831257334 a/n Siti Hajar & QRIS) */}
+      <TagihanModal data={tagihanModalData} onClose={() => setTagihanModalData(null)} />
 
       {/* Modal Kuitansi & Gambar */}
       <KuitansiModal data={activeKuitansi} onClose={() => setActiveKuitansi(null)} />
